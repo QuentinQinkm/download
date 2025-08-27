@@ -1,0 +1,151 @@
+Downloads Clipboard (macOS) — UI-Focused Requirements (v2)
+
+------------------------------------------------------------
+0) Scope & Positioning
+------------------------------------------------------------
+• Status-bar popover app (plugin-like). No standard window chrome. Non-resizable.
+• Single view only: All items (max 30, newest first) in one horizontal row.
+• Primary goals: smooth, modern UI; reliable live updates when files move; fast actions.
+
+------------------------------------------------------------
+1) Visual Style
+------------------------------------------------------------
+• Popover container: macOS “liquid glass” (vibrant/translucent) background.
+• Fixed width (suggest 720–840pt) and compact height (~200–220pt).
+• Rounded corners, subtle shadow. No traffic-light buttons; close by clicking outside/ESC.
+• Content layout: VStack
+  – Row 1: File strip (horizontal scroll, up to 30 items)
+  – Row 2: Suggested destinations (secondary row; appears during drag; see §4).
+• Typography: San Francisco; truncate filenames middle; short age label (e.g., “2h”).
+
+------------------------------------------------------------
+2) File Cell (Item) UI
+------------------------------------------------------------
+• Contents: thumbnail (48–64pt), middle-truncated filename, short age label.
+• Default state: neutral glass tile on liquid glass surface.
+• Hover state:
+  – Background: darker/browner glass overlay (subtle), 10–14pt corner radius.
+  – Scale: 1.03–1.06 (spring animation).
+  – Show action buttons as overlays:
+      ▸ Top-left: Delete (trash icon)
+      ▸ Top-right: Move To (folder/arrow icon)
+• Selection state:
+  – Single-click toggles selected with a 1–2pt stroke/outline + faint glow.
+  – Multi-select with ⌘-click or ⇧-click (drag-to-select is disabled to avoid DnD conflict).
+• Removal/move feedback:
+  – On remove from strip, remaining items reflow with slide + light spring/bounce.
+  – On successful move, show small destination badge on the item (for items that remain visible).
+
+------------------------------------------------------------
+3) Actions (per item)
+------------------------------------------------------------
+• Delete:
+  – Click Delete overlay → send to Trash immediately (no confirmation dialog).
+  – UI: fade-out + “Undo” toast for 5s; undo restores item (and file) to original location.
+• Move To:
+  – Click Move To overlay → present standard folder picker to choose destination.
+  – After move, update UI immediately; show “Moved to …” toast with “Reveal” option.
+• QuickLook (optional via hover/context):
+  – Spacebar or context menu → preview; does not alter selection.
+
+------------------------------------------------------------
+4) Drag & Drop UX
+------------------------------------------------------------
+• Drag start (from any selected item):
+  – Secondary row slides down showing Suggested Destinations (Recent + Pinned chips).
+  – Drag image includes a count badge if multiple items selected.
+• Leaving the popover while dragging:
+  – Secondary row collapses into a compact pill at bottom: “Suggested locations” (chips hidden).
+  – Drag can continue anywhere (Finder, apps, desktops). Normal macOS semantics apply.
+• Re-expanding suggestions:
+  – While still dragging, hover/press over the compact pill (~300ms) → expand back to full chips.
+• Drop targets:
+  – On chip: move items; success toast + destination badge; update list/state.
+  – Finder/apps: use system move/hand-off; update list/state.
+• Cancel:
+  – Drag back onto file strip and release OR press ESC → cancel; no changes.
+
+------------------------------------------------------------
+5) Suggested Destinations (Chips Row)
+------------------------------------------------------------
+• Composition (left→right):
+  – Recent folders (up to 8)
+  – Pinned folders (up to 5)
+• Visuals:
+  – Rounded capsule chips with folder icon + name; ellipsize middle; tooltip full path.
+• Interaction:
+  – Hover highlights chip; on drop, chip pulses to confirm.
+  – Pinned management via Settings; Recent is auto-learned from moves within the app.
+• Appearance policy:
+  – Hidden by default; appears on drag start; collapses to compact pill when drag leaves popover;
+    re-expands on hover over pill.
+
+------------------------------------------------------------
+6) Live Updates & Consistency
+------------------------------------------------------------
+• The file list must actively reflect the actual ~/Downloads contents:
+  – If an item is moved out (via chips/Finder/apps), it must disappear from the strip immediately.
+  – If an item moves back into ~/Downloads, it must reappear according to sort order.
+• Implementation note (non-UI but critical to UI correctness):
+  – Maintain a single observable source of truth (e.g., @Observable / @StateObject) for items.
+  – Backed by a filesystem watcher (FSEvents) + light metadata indexing.
+  – UI reads from this model; all file ops update the model first, then reconcile with FS events.
+
+------------------------------------------------------------
+7) Keyboard & Pointer
+------------------------------------------------------------
+• Multi-select: ⌘-click (toggle), ⇧-click (range) on the strip; drag-to-select disabled.
+• ESC: cancel drag; close QuickLook; optional close popover.
+• Space: QuickLook (optional).
+• Pointer: onHover controls showing overlays (Delete / Move To).
+
+------------------------------------------------------------
+8) Animations
+------------------------------------------------------------
+• Use SwiftUI spring animations for:
+  – Hover scale (fast, low-damping).
+  – Item removal/reflow (medium damping for gentle bounce).
+  – Secondary row expand/collapse (easeInOut or interpolating spring).
+• Duration guidelines:
+  – Hover reveal: 120–180ms
+  – Item reflow: 220–280ms
+  – Row expand/collapse: 220–300ms
+• Prefer implicit animations on state changes; avoid abrupt frame jumps.
+
+------------------------------------------------------------
+9) Recent Places Integration (UI + Feasibility Notes)
+------------------------------------------------------------
+• UI requirement:
+  – Include a “Recent” group in Suggested Destinations (left side of chips row).
+  – If no recent entries are available, hide the group automatically.
+• Feasibility guidance (non-UI, for implementers):
+  – There is no guaranteed public API for the exact system-wide “Recent Places” shown by NSOpenPanel.
+  – Recommended approach:
+      1) App-scoped recents: record destinations users choose (via chips or picker) and surface them in “Recent”.
+      2) Optionally read NSDocumentController.shared.recentDocumentURLs as a heuristic and filter to directories.
+         (Availability varies; do not rely on it for completeness.)
+  – Avoid depending on private/undocumented UserDefaults keys; behavior changes across macOS versions.
+• Permissions:
+  – Ensure security-scoped bookmarks for pinned destinations; recent entries should be validated before use.
+
+------------------------------------------------------------
+10) Technology Guidance (UI-first)
+------------------------------------------------------------
+• Primary UI: SwiftUI (Views, animations, state, list/collection layout).
+• Host/Chrome: AppKit NSStatusItem + NSPopover/NSPanel (non-resizable, anchored).
+• Drag & Drop: If needed, wrap AppKit drag handlers via NSViewRepresentable; otherwise use SwiftUI DropDelegate.
+• QuickLook: QLThumbnailGenerator for thumbnails; QLPreview if enabling previews.
+
+------------------------------------------------------------
+11) Acceptance (UI-only)
+------------------------------------------------------------
+• Popover opens in <150ms with 30 items and renders liquid glass correctly.
+• Hover reveals overlays and scale with smooth spring animation.
+• Selecting/deselecting reflects correct outline state; ⌘/⇧ multi-select works.
+• Drag start reveals chips row; leaving window collapses to compact pill; re-expands on hover; drops work.
+• Removing/moving items triggers smooth reflow; model and UI remain consistent with filesystem.
+• Delete acts immediately (Trash), with 5s undo; Move To shows picker and updates UI instantly.
+• Recent/Pinned chips elide gracefully; tooltips show full paths; icons render crisp @2x/@3x.
+
+------------------------------------------------------------
+END

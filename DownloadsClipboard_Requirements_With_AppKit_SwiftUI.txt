@@ -1,0 +1,74 @@
+Downloads Clipboard (macOS) — Requirements with AppKit/SwiftUI Guidance
+
+------------------------------------------------------------
+1) Scope
+------------------------------------------------------------
+• Status-bar utility for macOS that shows up to 30 recent items from ~/Downloads in a popover.
+• Provides drag-and-drop to suggested folders, safe delete, and quick move.
+• Goal: Keep Downloads tidy, prevent broken references, and make moving/deleting faster.
+
+------------------------------------------------------------
+2) UI Requirements
+------------------------------------------------------------
+• Popover style: anchored to NSStatusItem, non-resizable, fixed width (~720–840pt) and height (~200–220pt).
+• Background: macOS translucent “liquid glass” effect.
+• File list: horizontal scroll, up to 30 items.
+• File cell contents: thumbnail, middle-truncated filename, short age label.
+• Hover reveals: Delete and Move To icons; QuickLook via context or spacebar.
+• Selection: single/multi-select with ⌘/⇧ modifiers; selected state shows outline.
+• Secondary row of destinations: appears on drag, collapses to compact pill when drag leaves, re-expands on hover.
+
+------------------------------------------------------------
+3) Drag & Drop UX
+------------------------------------------------------------
+• Dragging items shows suggested destinations row (recent + pinned folders).
+• Leaving window collapses row into pill; dragging anywhere on screen continues with system semantics.
+• Hover pill to expand row again during drag.
+• Drop on chip moves items to that folder; Finder/apps follow normal macOS semantics.
+• Cancel: drag back onto file strip or press ESC.
+
+------------------------------------------------------------
+4) Destinations
+------------------------------------------------------------
+• Pinned: max 5, user-managed.
+• Recent: max 8, auto-learned from user actions; optionally integrate system recent places if available.
+• Conflicts handled by Finder “keep both.”
+
+------------------------------------------------------------
+5) Safety & Undo
+------------------------------------------------------------
+• All deletes go to Trash (never hard delete).
+• Undo/restore available for recent moves/deletes.
+• Optional exclude toggle for files to skip auto-delete.
+
+------------------------------------------------------------
+6) AppKit vs SwiftUI — Implementation Guidance
+------------------------------------------------------------
+• **Main UI (Popover, file list, animations, hover effects):** SwiftUI recommended. Smooth transitions, compact layout, and modern macOS visual effects are easier to express with SwiftUI.
+• **Status bar integration (NSStatusItem, NSPopover/NSPanel host):** AppKit. Required to attach the SwiftUI popover to the menu bar.
+• **Drag & drop coordination:** AppKit layer (NSDraggingItem, NSDraggingSession) or SwiftUI DropDelegate wrapped with NSViewRepresentable if advanced control needed.
+• **QuickLook previews and thumbnails:** QLThumbnailGenerator, QLPreview — AppKit frameworks, callable from SwiftUI.
+• **File operations:** FileManager + NSFileCoordinator for moves, FileManager.trashItem for delete.
+• **Permissions:** Use AppKit NSOpenPanel for requesting Downloads and folder access; store security-scoped bookmarks for persistence.
+
+------------------------------------------------------------
+7) Settings & Hotkeys
+------------------------------------------------------------
+• Retention days: 3/7/15 options.
+• Confirm before delete (toggle).
+• Auto-open on download (toggle).
+• Manage pinned folders (add/remove/reorder).
+• Hotkeys: configurable; default ⌥⇧D to toggle popover; ESC closes popover.
+
+------------------------------------------------------------
+8) Acceptance Criteria
+------------------------------------------------------------
+• Popover opens <150ms with 30 items.
+• Hover overlays appear and animate smoothly.
+• Drag UX collapses/expands as described.
+• Move/Delete/Undo work reliably.
+• ZIP and DMG helpers behave correctly (unzip prompt, DMG trash prompt).
+• UI and filesystem stay consistent under load.
+
+------------------------------------------------------------
+End of Document
