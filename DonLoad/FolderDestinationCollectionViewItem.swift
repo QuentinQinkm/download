@@ -38,11 +38,10 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         containerView.layer?.cornerRadius = 10
         containerView.layer?.masksToBounds = true
         
-        // Apply glassmorphism effect
-        let glassEffect = NSVisualEffectView()
-        glassEffect.material = .sidebar
-        glassEffect.state = .active
-        glassEffect.blendingMode = .withinWindow
+        // TEMPORARILY DISABLE: Apply glassmorphism effect
+        let glassEffect = NSView() // NSVisualEffectView()
+        glassEffect.wantsLayer = true
+        glassEffect.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.8).cgColor
         glassEffect.translatesAutoresizingMaskIntoConstraints = false
         
         // Add subtle border and shadow for depth
@@ -64,7 +63,6 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         iconImageView.layer?.cornerRadius = 6
         iconImageView.layer?.masksToBounds = true
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
-        containerView.addSubview(iconImageView)
         
         // Name label with modern typography
         nameLabel = NSTextField(labelWithString: "")
@@ -74,12 +72,16 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         nameLabel.maximumNumberOfLines = 2
         nameLabel.cell?.truncatesLastVisibleLine = true
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
-        containerView.addSubview(nameLabel)
         
-        // Add glass effect with proper layering
+        // Add glass effect first as background, then content on top
         containerView.addSubview(glassEffect)
         containerView.addSubview(iconImageView)
         containerView.addSubview(nameLabel)
+        
+        // Ensure proper layering - glass effect should be at the back
+        glassEffect.wantsLayer = true
+        iconImageView.wantsLayer = true
+        nameLabel.wantsLayer = true
         
         // Setup glass effect constraints
         NSLayoutConstraint.activate([
@@ -122,6 +124,7 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         let folderIcon = folder.icon
         folderIcon.size = NSSize(width: 20, height: 20)
         iconImageView.image = folderIcon
+        
         
         nameLabel.stringValue = folder.name
         

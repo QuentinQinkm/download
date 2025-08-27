@@ -8,12 +8,13 @@
 import Cocoa
 import Combine
 
-// MARK: - Drag Completion Protocol
+// MARK: - Protocols
+
 protocol DragCompletionDelegate: AnyObject {
     func didCompleteFileMove(file: DownloadFile, to destinationURL: URL)
 }
 
-// Removed view mode switching - always show all downloads
+// Using DragCompletionDelegate from FolderDestinationCollectionViewItem instead
 
 struct FolderItem {
     let name: String
@@ -25,399 +26,508 @@ class DownloadsViewController: NSViewController, DragCompletionDelegate {
     
     // MARK: - Properties
     
+    private var stackView: NSStackView!
+    private var headerView: NSView!
+    private var titleLabel: NSTextField!
     private var collectionView: NSCollectionView!
     private var scrollView: NSScrollView!
-    private var topBarView: NSView!
-    private var titleLabel: NSTextField!
-    private var actionButton: NSButton!
     
-    // Height constraint for dynamic resizing
-    private var viewHeightConstraint: NSLayoutConstraint?
+    // Folder grid (expandable)
+    private var folderContainerView: NSView!
+    private var folderCollectionView: NSCollectionView!
+    private var folderScrollView: NSScrollView!
+    private var folderTitleLabel: NSTextField!
     
-    // Individual height constraints for dynamic updates
-    private var scrollViewHeightConstraint: NSLayoutConstraint?
+    // Constraints for animation
+    private var folderInternalConstraints: [NSLayoutConstraint] = []
+    private var folderScrollHeightConstraint: NSLayoutConstraint?
     
-    // Always show all downloads
-    private var fileManager = DownloadsFileManager.shared
+    // Compute grid height based on current folders and current window/screen width
+    private func computeFolderGridHeight() -> CGFloat {
+        let windowWidth: CGFloat = {
+            if let w = view.window?.frame.width { return w }
+            if let screenWidth = NSScreen.main?.visibleFrame.width { return screenWidth * 0.5 }
+            return 800 // sensible fallback
+        }()
+        let itemWidth: CGFloat = 150
+        let itemHeight: CGFloat = 50
+        let itemSpacing: CGFloat = 12
+        let margins: CGFloat = 32 // 16 left + 16 right
+        let availableWidth = windowWidth - margins
+        let itemsPerRow = max(1, Int(availableWidth / (itemWidth + itemSpacing)))
+        let totalRows = max(1, Int(ceil(Double(folders.count) / Double(itemsPerRow))))
+        let totalHeight = CGFloat(totalRows) * itemHeight + CGFloat(totalRows - 1) * itemSpacing + 24 // top/bottom margins
+        return totalHeight
+    }
+    
+    // Data
+    private lazy var fileManager = DownloadsFileManager.shared
     private var currentFiles: [DownloadFile] = []
+    private var folders: [FolderItem] = []
     private var cancellables = Set<AnyCancellable>()
     
-    // Drag and drop state
+    // State
     private var isDragging = false
     private var draggedFile: DownloadFile?
-    private var isAnimating = false
-    // Folders moved to separate window - removed local folder UI
+    private var isFolderGridExpanded = false
     
-    // Reference to StatusBarManager for popup animations
+    // Reference to StatusBarManager
     weak var statusBarManager: StatusBarManager?
-    
-    // Folders now handled by separate FolderWindowViewController
     
     // MARK: - View Lifecycle
     
     override func loadView() {
         view = NSView()
         view.wantsLayer = true
-        
-        // Remove solid background - let the window's glass effect show through
         view.layer?.backgroundColor = NSColor.clear.cgColor
-        view.layer?.cornerRadius = 16
-        view.layer?.masksToBounds = true
         
         setupUI()
         setupConstraints()
-        
-        // Set initial height constraint (width will be set by parent window)
-        viewHeightConstraint = view.heightAnchor.constraint(equalToConstant: 216)
-        viewHeightConstraint?.isActive = true
-        
-        // Set initial individual heights (constraints will be set in setupConstraints)
-        // Note: These constraints are now optional and will be set later
-        
     }
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        
-        // Apply round corners to main window
-        view.wantsLayer = true
-        view.layer?.cornerRadius = 16
-        view.layer?.masksToBounds = true
-        
         setupBindings()
-        
-        // Force layout to ensure everything is properly sized
-        view.needsLayout = true
-        view.layoutSubtreeIfNeeded()
-        
-    }
-    
-    override func viewDidLayout() {
-        super.viewDidLayout()
-        
-        // Only update layout if we're not in the middle of an animation or drag
-        if !isDragging && !isAnimating {
-            updateCollectionViewLayout()
-        }
+        loadFolders()
+        refreshData()
     }
     
     deinit {
-        // Clean up Combine subscriptions
         cancellables.removeAll()
     }
     
-    private func setupBindings() {
-        NSLog("🔗 Setting up bindings between file manager and view controller")
+    // MARK: - UI Setup
+    
+    private func setupUI() {
+        // Create main stack view
+        stackView = NSStackView()
+        stackView.orientation = .vertical
+        stackView.distribution = .fill
+        stackView.spacing = 0
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        stackView.detachesHiddenViews = true // Hidden views won't occupy space
+        view.addSubview(stackView)
         
-        // Subscribe to file manager updates
+        setupHeader()
+        setupFilesCollectionView()
+        setupFolderGrid()
+    }
+    
+    private func setupHeader() {
+        headerView = NSView()
+        headerView.wantsLayer = true
+        headerView.translatesAutoresizingMaskIntoConstraints = false
+        
+        titleLabel = NSTextField(labelWithString: "Downloads")
+        titleLabel.font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+        titleLabel.textColor = NSColor.labelColor
+        titleLabel.alignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        headerView.addSubview(titleLabel)
+        
+        stackView.addArrangedSubview(headerView)
+        headerView.setContentHuggingPriority(.required, for: .vertical)
+        headerView.setContentCompressionResistancePriority(.required, for: .vertical)
+    }
+    
+    private func setupFilesCollectionView() {
+        // Create scroll view
+        scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = false
+        scrollView.hasHorizontalScroller = true
+        scrollView.autohidesScrollers = true
+        scrollView.borderType = .noBorder
+        scrollView.backgroundColor = NSColor.clear
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Create collection view
+        collectionView = NSCollectionView()
+        collectionView.backgroundColors = [NSColor.clear]
+        collectionView.isSelectable = false
+        collectionView.allowsMultipleSelection = false
+        
+        // Use flow layout
+        let layout = NSCollectionViewFlowLayout()
+        layout.scrollDirection = .horizontal
+        layout.itemSize = NSSize(width: 120, height: 140)
+        layout.minimumInteritemSpacing = 12
+        layout.minimumLineSpacing = 12
+        layout.sectionInset = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        collectionView.collectionViewLayout = layout
+        
+        // Register items
+        collectionView.register(FileCollectionViewItem.self, forItemWithIdentifier: FileCollectionViewItem.identifier)
+        collectionView.register(FolderCollectionViewItem.self, forItemWithIdentifier: FolderCollectionViewItem.identifier)
+        
+        // Set data source and delegate
+        collectionView.dataSource = self
+        collectionView.delegate = self
+        
+        // Setup drag and drop
+        collectionView.registerForDraggedTypes([.fileURL])
+        collectionView.setDraggingSourceOperationMask(.move, forLocal: true)
+        
+        scrollView.documentView = collectionView
+        
+        // Set scroll view to auto-size based on content with a maximum height
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            scrollView.heightAnchor.constraint(equalToConstant: 172) // Keep fixed height for files section
+        ])
+        
+        stackView.addArrangedSubview(scrollView)
+        scrollView.setContentHuggingPriority(.required, for: .vertical)
+        scrollView.setContentCompressionResistancePriority(.required, for: .vertical)
+    }
+    
+    private func setupFolderGrid() {
+        // Create folder container
+        folderContainerView = NSView()
+        folderContainerView.wantsLayer = true
+        folderContainerView.layer?.backgroundColor = NSColor.clear.cgColor
+        folderContainerView.layer?.masksToBounds = true  // Clip content to bounds
+        folderContainerView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Create separator line
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        folderContainerView.addSubview(separator)
+        
+        // Create folder title
+        folderTitleLabel = NSTextField(labelWithString: "Move to Folder")
+        folderTitleLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        folderTitleLabel.textColor = NSColor.secondaryLabelColor
+        folderTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        folderContainerView.addSubview(folderTitleLabel)
+        
+        // Create folder scroll view
+        folderScrollView = NSScrollView()
+        folderScrollView.hasVerticalScroller = false
+        folderScrollView.hasHorizontalScroller = false
+        folderScrollView.autohidesScrollers = true
+        folderScrollView.borderType = .noBorder
+        folderScrollView.backgroundColor = NSColor.clear
+        folderScrollView.verticalScrollElasticity = .none
+        folderScrollView.horizontalScrollElasticity = .none
+        folderScrollView.translatesAutoresizingMaskIntoConstraints = false
+        folderContainerView.addSubview(folderScrollView)
+        
+        // Create folder collection view
+        folderCollectionView = NSCollectionView()
+        folderCollectionView.backgroundColors = [NSColor.clear]
+        folderCollectionView.isSelectable = false
+        folderCollectionView.allowsMultipleSelection = false
+        
+        // Use grid layout with dynamic sizing based on window width
+        let folderLayout = NSCollectionViewGridLayout()
+        folderLayout.minimumItemSize = NSSize(width: 150, height: 50)
+        folderLayout.maximumItemSize = NSSize(width: 150, height: 50)
+        folderLayout.minimumInteritemSpacing = 12
+        folderLayout.minimumLineSpacing = 12
+        folderLayout.margins = NSEdgeInsets(top: 12, left: 16, bottom: 12, right: 16)
+        folderCollectionView.collectionViewLayout = folderLayout
+        
+        // Set up collection view to size itself properly
+        folderCollectionView.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Register folder item
+        folderCollectionView.register(FolderDestinationCollectionViewItem.self, forItemWithIdentifier: FolderDestinationCollectionViewItem.identifier)
+        
+        // Set data source and delegate
+        folderCollectionView.dataSource = self
+        folderCollectionView.delegate = self
+        
+        folderScrollView.documentView = folderCollectionView
+        
+        // Make collection view size to its content
+        folderCollectionView.setContentCompressionResistancePriority(.required, for: .vertical)
+        folderCollectionView.setContentHuggingPriority(.required, for: .vertical)
+        
+        // Ensure folder scroll view also sizes to content  
+        folderScrollView.setContentCompressionResistancePriority(.required, for: .vertical)
+        folderScrollView.setContentHuggingPriority(.required, for: .vertical)
+        
+        
+        stackView.addArrangedSubview(folderContainerView)
+        folderContainerView.setContentHuggingPriority(.required, for: .vertical)
+        folderContainerView.setContentCompressionResistancePriority(.required, for: .vertical)
+        // Ensure content is anchored to the top of the window during extra space
+        stackView.setViews(stackView.arrangedSubviews, in: .top)
+        
+        // Initially collapsed and hidden
+        folderContainerView.isHidden = true
+    }
+    
+    private func setupConstraints() {
+        // Main layout constraints (always active)
+        NSLayoutConstraint.activate([
+            // Stack view fills the entire view
+            stackView.topAnchor.constraint(equalTo: view.topAnchor),
+            stackView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            stackView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            stackView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            
+            // Header constraints
+            headerView.heightAnchor.constraint(equalToConstant: 50),
+            titleLabel.centerXAnchor.constraint(equalTo: headerView.centerXAnchor),
+            titleLabel.centerYAnchor.constraint(equalTo: headerView.centerYAnchor)
+        ])
+        
+        let gridHeight = computeFolderGridHeight()
+        
+        // Folder internal constraints (activated/deactivated during expand/collapse)
+        folderInternalConstraints = [
+            folderTitleLabel.topAnchor.constraint(equalTo: folderContainerView.topAnchor, constant: 8),
+            folderTitleLabel.leadingAnchor.constraint(equalTo: folderContainerView.leadingAnchor, constant: 16),
+            
+            folderScrollView.topAnchor.constraint(equalTo: folderTitleLabel.bottomAnchor, constant: 8),
+            folderScrollView.leadingAnchor.constraint(equalTo: folderContainerView.leadingAnchor),
+            folderScrollView.trailingAnchor.constraint(equalTo: folderContainerView.trailingAnchor),
+            folderScrollView.bottomAnchor.constraint(equalTo: folderContainerView.bottomAnchor, constant: -8),
+            {
+                let c = folderScrollView.heightAnchor.constraint(equalToConstant: gridHeight)
+                folderScrollHeightConstraint = c
+                return c
+            }()
+        ]
+        
+        // Initially deactivated since container starts collapsed
+        NSLayoutConstraint.deactivate(folderInternalConstraints)
+    }
+    
+    // MARK: - Data Management
+    
+    private func setupBindings() {
         fileManager.$downloadFiles
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] files in
-                NSLog("📥 Received downloadFiles update - count: \(files.count)")
+            .sink { [weak self] _ in
                 self?.updateCurrentFiles()
             }
             .store(in: &cancellables)
         
         fileManager.$recentFiles
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] files in
-                NSLog("📥 Received recentFiles update - count: \(files.count)")
-                // Always update since we only show all downloads
+            .sink { [weak self] _ in
                 self?.updateCurrentFiles()
             }
             .store(in: &cancellables)
     }
     
-    // MARK: - UI Setup
-    
-    private func setupUI() {
-        setupTopBar()
-        setupCollectionView()
+    private func updateCurrentFiles() {
+        print("🔄 DEBUG: updateCurrentFiles() called")
+        print("🔄 DEBUG: fileManager.downloadFiles count: \(fileManager.downloadFiles.count)")
+        currentFiles = Array(fileManager.downloadFiles.prefix(20)) // Limit to 20 files
+        print("🔄 DEBUG: currentFiles count after update: \(currentFiles.count)")
+        collectionView.reloadData()
+        print("🔄 DEBUG: Main collection view reloaded")
     }
     
-    private func setupTopBar() {
-        topBarView = NSView()
-        topBarView.wantsLayer = true
-        topBarView.layer?.cornerRadius = 12
-        topBarView.layer?.masksToBounds = true
-        
-        // Apply glassmorphism effect to top bar
-        let topBarBlur = NSVisualEffectView()
-        topBarBlur.material = .sidebar
-        topBarBlur.state = .active
-        topBarBlur.blendingMode = .withinWindow
-        topBarBlur.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Add subtle border and shadow
-        topBarView.layer?.borderWidth = 0.5
-        topBarView.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
-        topBarView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.1).cgColor
-        topBarView.layer?.shadowOffset = NSSize(width: 0, height: 1)
-        topBarView.layer?.shadowRadius = 4
-        topBarView.layer?.shadowOpacity = 0.3
-        
-        topBarView.translatesAutoresizingMaskIntoConstraints = false
-        
-        titleLabel = NSTextField(labelWithString: "Downloads")
-        titleLabel.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
-        titleLabel.textColor = NSColor.labelColor
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        
-        // Removed action button since we always show all downloads
-        
-        // Add subviews with proper layering
-        topBarView.addSubview(topBarBlur)
-        topBarView.addSubview(titleLabel)
-        view.addSubview(topBarView)
-        
-        // Setup top bar blur constraints
-        NSLayoutConstraint.activate([
-            topBarBlur.topAnchor.constraint(equalTo: topBarView.topAnchor),
-            topBarBlur.leadingAnchor.constraint(equalTo: topBarView.leadingAnchor),
-            topBarBlur.trailingAnchor.constraint(equalTo: topBarView.trailingAnchor),
-            topBarBlur.bottomAnchor.constraint(equalTo: topBarView.bottomAnchor)
-        ])
+    func refreshData() {
+        print("🔄 DEBUG: refreshData() called")
+        updateCurrentFiles()
+        loadFolders()
+        folderCollectionView.reloadData()
+        print("🔄 DEBUG: refreshData() completed")
     }
     
-    private func setupCollectionView() {
-        // Create scroll view
-        scrollView = NSScrollView()
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasVerticalScroller = false
-        scrollView.hasHorizontalScroller = true
-        scrollView.autohidesScrollers = true
+    // MARK: - Folder Management
+    
+    private func loadFolders() {
+        folders = []
         
-        // Create collection view
-        collectionView = NSCollectionView()
-        collectionView.wantsLayer = true
-        collectionView.backgroundColors = [NSColor.clear]
-        collectionView.isSelectable = false
-        collectionView.allowsMultipleSelection = false
+        // Add system folders
+        let systemFolders = getSystemFolders()
+        folders.append(contentsOf: systemFolders)
         
-        let layout = createFlowLayout()
-        collectionView.collectionViewLayout = layout
+        // Add recent places
+        let recentFolders = getRecentPlaces()
+        folders.append(contentsOf: recentFolders)
         
-        // Register the file item and folder item
-        collectionView.register(FileCollectionViewItem.self, forItemWithIdentifier: FileCollectionViewItem.identifier)
-        collectionView.register(FolderCollectionViewItem.self, forItemWithIdentifier: FolderCollectionViewItem.identifier)
-        
-        collectionView.dataSource = self
-        collectionView.delegate = self
-        
-        scrollView.documentView = collectionView
-        view.addSubview(scrollView)
-        
-        // Folders now in separate window - removed local folder setup
+        // Remove duplicates
+        let uniquePaths = Array(Set(folders.map { $0.url.path }))
+        folders = uniquePaths.compactMap { path in
+            folders.first { $0.url.path == path }
+        }
         
     }
     
-    // Removed setupFoldersCollectionView and createFoldersLayout - folders moved to separate window
-    
-    private func createFlowLayout() -> NSCollectionViewFlowLayout {
-        let layout = NSCollectionViewFlowLayout()
-        layout.scrollDirection = .horizontal
-        layout.itemSize = NSSize(width: 120, height: 140)
-        layout.minimumInteritemSpacing = 12
-        layout.minimumLineSpacing = 12
+    private func getSystemFolders() -> [FolderItem] {
+        var systemFolders: [FolderItem] = []
         
-        // Calculate center alignment
-        let itemWidth: CGFloat = 120
-        let itemSpacing: CGFloat = 12
-        let availableWidth = view.bounds.width
+        if let desktopURL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
+            systemFolders.append(FolderItem(name: "Desktop", url: desktopURL, icon: NSWorkspace.shared.icon(forFile: desktopURL.path)))
+        }
         
-        // For centering, calculate how many items can fit and adjust side insets
-        let itemsPerRow = max(1, Int((availableWidth - 32) / (itemWidth + itemSpacing))) // 32 for min margins
-        let totalItemsWidth = CGFloat(itemsPerRow) * itemWidth + CGFloat(max(0, itemsPerRow - 1)) * itemSpacing
-        let sideInset = max(16, (availableWidth - totalItemsWidth) / 2)
+        if let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+            systemFolders.append(FolderItem(name: "Documents", url: documentsURL, icon: NSWorkspace.shared.icon(forFile: documentsURL.path)))
+        }
         
-        layout.sectionInset = NSEdgeInsets(top: 4, left: sideInset, bottom: 4, right: sideInset)
-        return layout
+        if let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            systemFolders.append(FolderItem(name: "Downloads", url: downloadsURL, icon: NSWorkspace.shared.icon(forFile: downloadsURL.path)))
+        }
+        
+        return systemFolders
     }
     
-    private func updateCollectionViewLayout() {
-        guard let flowLayout = collectionView.collectionViewLayout as? NSCollectionViewFlowLayout else { return }
-        
-        // Calculate center alignment based on current view width
-        let itemWidth: CGFloat = 120
-        let itemSpacing: CGFloat = 12
-        let availableWidth = view.bounds.width
-        
-        // Calculate how many items can fit and adjust side insets for centering
-        let itemsPerRow = max(1, Int((availableWidth - 32) / (itemWidth + itemSpacing)))
-        let totalItemsWidth = CGFloat(itemsPerRow) * itemWidth + CGFloat(max(0, itemsPerRow - 1)) * itemSpacing
-        let sideInset = max(16, (availableWidth - totalItemsWidth) / 2)
-        
-        flowLayout.sectionInset = NSEdgeInsets(top: 4, left: sideInset, bottom: 4, right: sideInset)
-        
-        // Folders now handled by separate window
-    }
-    
-    private func setupConstraints() {
-        
-        // Remove all existing constraints to prevent conflicts
-        view.removeConstraints(view.constraints)
-        topBarView.removeConstraints(topBarView.constraints)
-        scrollView.removeConstraints(scrollView.constraints)
-        
-        
-        // Activate basic constraints
-        NSLayoutConstraint.activate([
-            // Top bar constraints
-            topBarView.topAnchor.constraint(equalTo: view.topAnchor),
-            topBarView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            topBarView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topBarView.heightAnchor.constraint(equalToConstant: 50),
-            titleLabel.centerXAnchor.constraint(equalTo: topBarView.centerXAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: topBarView.centerYAnchor),
+    private func getRecentPlaces() -> [FolderItem] {
+        let recentPlaces = UserDefaults.standard.stringArray(forKey: "RecentPlaces") ?? []
+        return recentPlaces.compactMap { path in
+            let url = URL(fileURLWithPath: path)
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
             
-            // Scroll view constraints - let it fill available space
-            scrollView.topAnchor.constraint(equalTo: topBarView.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            
-            // Scroll view fills bottom space (folders moved to separate window)
-            scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
-        
-        
-        // Height constraint for scroll view only (folders moved to separate window)
-        scrollViewHeightConstraint = scrollView.heightAnchor.constraint(greaterThanOrEqualToConstant: 150)
-        scrollViewHeightConstraint?.isActive = true
-        
-        
-        // Force layout update
-        view.needsUpdateConstraints = true
-        view.updateConstraints()
-        view.needsLayout = true
-        view.layoutSubtreeIfNeeded()
-        
-    }
-    
-    // MARK: - Public Methods
-    
-    // Removed setViewMode - always show all downloads
-    
-    // MARK: - Drag Completion Methods
-    
-    func didCompleteFileMove(file: DownloadFile, to destinationURL: URL) {
-        // Simple: just remove the file immediately
-        if let index = currentFiles.firstIndex(where: { $0.id == file.id }) {
-            currentFiles.remove(at: index)
-            collectionView.reloadData()
+            let name = url.lastPathComponent
+            let icon = NSWorkspace.shared.icon(forFile: path)
+            return FolderItem(name: name, url: url, icon: icon)
         }
     }
     
-    // MARK: - Private Methods
+    // MARK: - Folder Grid Animation
     
-    private func updateTopBar() {
-        // Always show "Downloads" title
-        guard titleLabel != nil else { return }
-        titleLabel.stringValue = "Downloads"
+    private func expandFolderGrid() {
+        guard !isFolderGridExpanded else { return }
+        
+        print("🔧 EXPAND: Expanding folder grid")
+        isFolderGridExpanded = true
+        
+        // Prepare: activate constraints and compute target sizes, but do NOT show folder yet
+        NSLayoutConstraint.activate(folderInternalConstraints)
+        folderCollectionView.reloadData()
+        folderCollectionView.collectionViewLayout?.invalidateLayout()
+        folderCollectionView.layoutSubtreeIfNeeded()
+        
+        let targetGridHeight = max(0, (self.folderScrollHeightConstraint != nil ? computeFolderGridHeight() : 0))
+        folderScrollHeightConstraint?.constant = targetGridHeight
+        
+        // Layout to include folder height in fitting size calculation
+        // Temporarily unhide with alpha 0 to include in layout but not visible
+        let wasHidden = folderContainerView.isHidden
+        folderContainerView.isHidden = false
+        let previousAlpha = folderContainerView.alphaValue
+        folderContainerView.alphaValue = 0.0
+        view.layoutSubtreeIfNeeded()
+        let targetWindowHeight = view.fittingSize.height
+        print("🔧 EXPAND: Calculated new height: \(targetWindowHeight)")
+        
+        // Restore hidden state before animating if it was hidden
+        folderContainerView.isHidden = wasHidden
+        folderContainerView.alphaValue = previousAlpha
+        
+        // Now animate the window expansion
+        let newHeight = self.view.fittingSize.height
+        print("🔧 EXPAND: Calculated new height: \(newHeight)")
+        self.statusBarManager?.expandWindow(to: newHeight)
+        
+        // 2) After resize completes, show and fade-in folder
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { // Assuming 0.22 is the duration of the window expansion
+            self.folderContainerView.alphaValue = 0.0
+            self.folderContainerView.isHidden = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.folderContainerView.animator().alphaValue = 1.0
+            }
+        }
+        
     }
     
-
-    
-
-    
-    func refreshData() {
-        updateCurrentFiles()
+    private func collapseFolderGrid() {
+        guard isFolderGridExpanded else { return }
+        
+        print("🔧 COLLAPSE: Collapsing folder grid")
+        isFolderGridExpanded = false
+        
+        // 1) Fade out and hide folder first (no window resize yet)
+        let fadeDuration: TimeInterval = 0.18
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = fadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            self.folderContainerView.animator().alphaValue = 0.0
+        }, completionHandler: {
+            // After fade completes, hide and deactivate constraints
+            self.folderContainerView.isHidden = true
+            NSLayoutConstraint.deactivate(self.folderInternalConstraints)
+            self.folderScrollHeightConstraint?.constant = 0
+            // Layout to measure collapsed height
+            self.view.layoutSubtreeIfNeeded()
+            let collapseHeight: CGFloat = self.view.fittingSize.height
+            print("🔧 COLLAPSE: Collapsing to height: \(collapseHeight)")
+            // 2) Now animate window resize ONLY
+            let resizeDuration: TimeInterval = 0.22
+            self.statusBarManager?.collapseWindow(to: collapseHeight)
+        })
     }
     
     // MARK: - Drag Session Management
     
     func startDragSession(for file: DownloadFile) {
-        NSLog("🚀 Starting drag session for file: \(file.name)")
-        
+        print("🔧 DRAG STATE: Starting drag session for file: \(file.name)")
         isDragging = true
-        isAnimating = true
         draggedFile = file
-        
-        // Show folder window for drag targets
-        statusBarManager?.showFolderWindow(for: file)
-        
-        // Stop animation flag after folder window animation completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.isAnimating = false
-        }
+        expandFolderGrid()
     }
     
     func endDragSession() {
-        NSLog("🛑 Ending drag session")
+        print("🔧 DRAG STATE: Ending drag session")
         isDragging = false
-        isAnimating = true
         draggedFile = nil
-        
-        // Hide folder window
-        statusBarManager?.hideFolderWindow()
-        
-        // Stop animation flag after folder window animation completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            self.isAnimating = false
-        }
+        collapseFolderGrid()
     }
     
-    private func updateCurrentFiles() {
-        
-        guard let collectionView = collectionView else {
-            NSLog("❌ DATA DEBUG: Collection view is nil")
-            return
-        }
-        
-        // Skip updates during animation to prevent repositioning
-        if isAnimating {
-            return
-        }
-        
-        // Always show all downloads (up to 30 files)
-        currentFiles = Array(fileManager.downloadFiles.prefix(30))
-        
+    // MARK: - Delegate Methods
+    
+    func didCompleteFileMove(file: DownloadFile, to destinationURL: URL) {
+        if let index = currentFiles.firstIndex(where: { $0.id == file.id }) {
+            currentFiles.remove(at: index)
         collectionView.reloadData()
-        
-        // Force layout update after reload only if not animating
-        if !isAnimating {
-            DispatchQueue.main.async {
-                if !self.isAnimating {
-                    collectionView.needsLayout = true
-                    collectionView.layoutSubtreeIfNeeded()
-                }
-            }
         }
     }
     
-    // Removed all folder methods - now handled by separate FolderWindowViewController
+
 }
 
 // MARK: - Collection View Data Source
 
 extension DownloadsViewController: NSCollectionViewDataSource {
     func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
-        // Only handle main files collection view (folders moved to separate window)
-        return currentFiles.isEmpty ? 1 : currentFiles.count + 1
+        if collectionView == self.collectionView {
+            return currentFiles.isEmpty ? 1 : currentFiles.count + 1 // +1 for "Open Downloads Folder"
+        } else if collectionView == self.folderCollectionView {
+            return folders.count
+        }
+        return 0
     }
     
     func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
-        // Only handle main files collection view (folders moved to separate window)
-        // Check if this is the last item (Open Downloads Folder)
-        if indexPath.item == currentFiles.count {
-            let item = collectionView.makeItem(withIdentifier: FolderCollectionViewItem.identifier, for: indexPath) as! FolderCollectionViewItem
-            item.configure()
+        if collectionView == self.collectionView {
+            if indexPath.item == currentFiles.count {
+                // "Open Downloads Folder" item
+                let item = collectionView.makeItem(withIdentifier: FolderCollectionViewItem.identifier, for: indexPath) as! FolderCollectionViewItem
+                item.configure()
+                return item
+            } else {
+                // Regular file item
+                let item = collectionView.makeItem(withIdentifier: FileCollectionViewItem.identifier, for: indexPath) as! FileCollectionViewItem
+                item.downloadsViewController = self
+                
+                if currentFiles.isEmpty {
+                    item.configureForEmptyState()
+                } else {
+                    let file = currentFiles[indexPath.item]
+                    item.configure(with: file)
+                }
+                
+                return item
+            }
+        } else if collectionView == self.folderCollectionView {
+            // Folder item
+            let item = collectionView.makeItem(withIdentifier: FolderDestinationCollectionViewItem.identifier, for: indexPath) as! FolderDestinationCollectionViewItem
+            let folder = folders[indexPath.item]
+            item.configure(with: folder, draggedFile: draggedFile, delegate: self)
             return item
         }
         
-        // Regular file item
-        let item = collectionView.makeItem(withIdentifier: FileCollectionViewItem.identifier, for: indexPath) as! FileCollectionViewItem
-        
-        // Set parent reference for drag operations
-        item.downloadsViewController = self
-        
-        if currentFiles.isEmpty {
-            item.configureForEmptyState()
-        } else {
-            let downloadFile = currentFiles[indexPath.item]
-            item.configure(with: downloadFile)
-        }
-        
-        return item
+        return NSCollectionViewItem()
     }
 }
 
@@ -425,12 +535,11 @@ extension DownloadsViewController: NSCollectionViewDataSource {
 
 extension DownloadsViewController: NSCollectionViewDelegate {
     func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
-        // Only handle main files collection view (folders moved to separate window)
+        if collectionView == self.collectionView {
         if let indexPath = indexPaths.first, indexPath.item == currentFiles.count {
-            // "Open Downloads Folder" cell was clicked
+                // "Open Downloads Folder" was clicked
             NSWorkspace.shared.open(DownloadsFileManager.shared.downloadsURL)
+            }
         }
     }
 }
-
-
