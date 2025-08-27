@@ -1,0 +1,162 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2865
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \{\
+  "project": "Downloads Clipboard (macOS)",\
+  "goal": "Keep Downloads tidy and prevent broken references via a status-bar clipboard and inactivity-based auto-delete.",\
+  "core_features": \{\
+    "auto_delete": \{\
+      "options": [3, 7, 15],\
+      "definition": "Based on last opened date (kMDItemLastUsedDate; fallback contentAccessDate \uc0\u8594  contentModificationDate).",\
+      "action": "Move to Trash (never hard delete).",\
+      "confirmation": "Optional per-file confirmation before deletion.",\
+      "undo_restore": "Restore from Trash with original path remembered."\
+    \},\
+    "status_bar_popover": \{\
+      "invocation": [\
+        "Auto-open on new download completion (shows Recent 5 min view)",\
+        "Click status bar menu item: Open Popup (opens All 30 view)",\
+        "Global hotkey (opens All 30 view)"\
+      ],\
+      "views": \{\
+        "recent_5_min": "Files completed within the last 5 minutes (default when auto-opened by downloads).",\
+        "all": "All files (max 30, newest first, horizontal scroll)."\
+      \},\
+      "layout": \{\
+        "list_type": "Horizontal NSCollectionView",\
+        "max_items": 30,\
+        "last_cell": "Open Downloads Folder"\
+      \},\
+      "file_cell": \{\
+        "contents": ["Thumbnail", "Filename", "Age"],\
+        "hover_actions": ["Move", "Delete", "Quick Look", "Uncompress ZIP if applicable"],\
+        "context_menu": ["Delete", "Reveal in Finder", "Get Info", "Exclude", "Uncompress ZIP if applicable"],\
+        "states": ["normal", "selected", "hovered", "moved", "deleted", "excluded"]\
+      \}\
+    \},\
+    "selection": \{\
+      "multi_select": true,\
+      "batch_actions": ["Move", "Delete", "Drag"]\
+    \},\
+    "drag_drop": \{\
+      "drag_start": "File drag begins from clipboard UI",\
+      "secondary_popup": "Shows recent and pinned folders as chips while dragging",\
+      "drop_on_chip": "Move to target folder then update state",\
+      "drop_into_finder": "Regular move via system semantics",\
+      "drop_into_apps": "Provide file URL",\
+      "cancel": "Drag back onto main strip cancels operation"\
+    \},\
+    "zip_handling": \{\
+      "trigger": ["Double-click ZIP", "Right click \uc0\u8594  Uncompress"],\
+      "behavior": "Uncompress into same folder; show extracted item immediately in UI.",\
+      "delete_original": "Ask to remove ZIP after successful uncompress."\
+    \},\
+    "dmg_handling": \{\
+      "trigger": "After DMG mounted and installer/app launched from it",\
+      "detection": "Monitor mounted volumes and app/pkg launch events",\
+      "behavior": "Prompt: 'Installation detected \'97 move DMG to Trash?'",\
+      "delete_original": "Trash on user confirmation"\
+    \}\
+  \},\
+  "folders_destinations": \{\
+    "pinned": \{ "max": 5, "user_managed": true \},\
+    "recent": \{ "max": 8, "source": "Derived from moves within app" \},\
+    "conflicts": "Finder 'keep both' semantics by default",\
+    "permissions": "Request Downloads access via NSOpenPanel; store security-scoped bookmarks (and for pinned destinations)"\
+  \},\
+  "monitoring_metadata": \{\
+    "watcher": "FSEvents on ~/Downloads (ignore .download, .crdownload until complete)",\
+    "captured_fields": ["path", "size", "UTI", "source (kMDItemWhereFroms)", "addedAt", "lastOpenedAt", "status"],\
+    "recent_window_minutes": 5\
+  \},\
+  "deletion_safety": \{\
+    "delete_behavior": "All deletes go to Trash",\
+    "logging": "Action log with fromPath, toPath, date, batchId",\
+    "undo": "Undo last N operations",\
+    "exclude_toggle": "Allow excluding specific files/folders from auto-delete"\
+  \},\
+  "ui": \{\
+    "status_bar_menu": \{\
+      "items": ["Open Popup", "Settings\'85", "Quit"],\
+      "open_popup_behavior": "Opens All (30) view"\
+    \},\
+    "popover": \{\
+      "anchor": "NSStatusItem",\
+      "container": "NSPopover or borderless NSPanel",\
+      "width": "600\'96900px adaptive",\
+      "height": "160\'96220px compact",\
+      "top_bar": \{\
+        "recent": \{ "title": "Recent (5 min)", "right": "Expand (Show All 30)" \},\
+        "all": \{ "title": "All (30)", "right": "Collapse to Recent" \},\
+        "selection": \{ "label": "N selected", "actions": ["Move", "Delete", "Cancel"] \}\
+      \}\
+    \},\
+    "cells": \{\
+      "thumbnail_size": "48\'9664px",\
+      "filename": "Middle-truncated",\
+      "age": "Short label (e.g., 2h)",\
+      "hover": "Reveal action bar",\
+      "selected": "Outline + checkmark",\
+      "moved": "Destination badge",\
+      "deleted": "Fade + Undo toast"\
+    \},\
+    "secondary_strip": \{\
+      "behavior": "Appears on drag start; hides on drag end",\
+      "contents": ["Recent folders (left)", "Pinned folders (right)"],\
+      "animation": "Slide-down/up"\
+    \}\
+  \},\
+  "hotkeys": \{\
+    "open_close_popup": \{\
+      "default": "\uc0\u8997 \u8679 D (example)",\
+      "configurable": true,\
+      "behavior": "Toggles popover; when opened via hotkey, show All (30) view"\
+    \},\
+    "dismiss_popup": \{\
+      "escape_key": true,\
+      "click_outside": true\
+    \}\
+  \},\
+  "settings": \{\
+    "retention_days": [3, 7, 15],\
+    "confirm_before_delete": true,\
+    "auto_open_on_download": true,\
+    "hotkeys_configurable": true,\
+    "pinned_folders": "Add/Remove/Reorder",\
+    "privacy": "Local-only, no data sent out"\
+  \},\
+  "acceptance_criteria": \{\
+    "recent_auto_popup": "When new files finish downloading, popover opens automatically showing files from the last 5 minutes.",\
+    "menu_hotkey_behavior": "Opening via status-bar menu or hotkey shows All (30) view; status-bar menu contains Open Popup, Settings, Quit.",\
+    "hotkey_toggle": "Configured hotkey opens and closes the popover reliably.",\
+    "zip_handling": "Double-click/right-click uncompresses ZIP and shows extracted item; optional ZIP removal prompt.",\
+    "dmg_handling": "Detects installation from mounted DMG and prompts to remove DMG.",\
+    "drag_ux": "Secondary shortcut strip appears during drag; dropping on chips moves; dragging back cancels.",\
+    "move_delete_undo": "Moves update paths; deletes go to Trash; undo/restore works.",\
+    "auto_delete": "Respects 3/7/15 days after last open.",\
+    "performance": "Popover opens <150ms with up to 30 items; thumbnails load asynchronously."\
+  \},\
+  "technical_notes": \{\
+    "status_bar": "NSStatusItem + NSPopover/NSPanel; NSMenu for dropdown",\
+    "hotkeys_impl": "Register global shortcut (e.g., MASShortcut or Event Tap); ensure accessibility permissions if needed",\
+    "list": "NSCollectionView horizontal",\
+    "hover_context": "NSTrackingArea + NSMenu",\
+    "quicklook": "QLThumbnailGenerator",\
+    "drag": "NSDraggingItem (file URLs); custom drag image with count badge",\
+    "moves": "NSFileCoordinator + FileManager.moveItem",\
+    "trash": "FileManager.trashItem",\
+    "permissions": "Security-scoped bookmarks",\
+    "watcher": "FSEvents with debounce; ignore temp files",\
+    "zip_uncompress": "Use Archive framework or `ditto`; verify success",\
+    "dmg_detection": "Observe /Volumes mounts + NSWorkspace notifications (launched apps/pkgs)"\
+  \},\
+  "out_of_scope": [\
+    "Cross-device sync",\
+    "Tagging/Spotlight comments",\
+    "Complex per-type automation rules beyond ZIP/DMG helpers"\
+  ]\
+\}}

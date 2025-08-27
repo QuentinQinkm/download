@@ -68,10 +68,10 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         
         // Name label with modern typography
         nameLabel = NSTextField(labelWithString: "")
-        nameLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        nameLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         nameLabel.textColor = .labelColor
         nameLabel.alignment = .center
-        nameLabel.maximumNumberOfLines = 1
+        nameLabel.maximumNumberOfLines = 2
         nameLabel.cell?.truncatesLastVisibleLine = true
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
         containerView.addSubview(nameLabel)
@@ -104,7 +104,7 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
             iconImageView.widthAnchor.constraint(equalToConstant: 20),
             iconImageView.heightAnchor.constraint(equalToConstant: 20),
             
-            // Name label (right side)
+            // Name label (right side, next to icon)
             nameLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 8),
             nameLabel.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -8),
             nameLabel.centerYAnchor.constraint(equalTo: containerView.centerYAnchor)
@@ -118,7 +118,7 @@ class FolderDestinationCollectionViewItem: NSCollectionViewItem, NSDraggingDesti
         self.draggedFile = draggedFile
         self.dragCompletionDelegate = delegate
         
-        // Set folder icon with compact size
+        // Set folder icon with appropriate size for side-by-side layout
         let folderIcon = folder.icon
         folderIcon.size = NSSize(width: 20, height: 20)
         iconImageView.image = folderIcon

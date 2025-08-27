@@ -44,22 +44,9 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
     // MARK: - UI Setup
     
     private func setupUI() {
-        // Container view with modern styling (no glassmorphism background)
-        containerView = NSView()
-        containerView.wantsLayer = true
-        containerView.layer?.cornerRadius = 12
-        containerView.layer?.masksToBounds = true
-        
-        // Remove glassmorphism - just use transparent background
-        // Add subtle border and shadow for depth
-        containerView.layer?.borderWidth = 0.5
-        containerView.layer?.borderColor = NSColor.white.withAlphaComponent(0.15).cgColor
-        containerView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.08).cgColor
-        containerView.layer?.shadowOffset = NSSize(width: 0, height: 2)
-        containerView.layer?.shadowRadius = 6
-        containerView.layer?.shadowOpacity = 0.4
-        
-        containerView.translatesAutoresizingMaskIntoConstraints = false
+        // Container view with clean transparent styling
+        containerView = view.createStyledContainer(cornerRadius: 12)
+        containerView.addShadow()
         
         // Thumbnail image view with rounded corners
         thumbnailImageView = NSImageView()
@@ -132,7 +119,6 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
             moveButton.heightAnchor.constraint(equalToConstant: 24)
         ])
         
-        NSLog("🎭 Hover view setup complete - alpha: \(hoverView.alphaValue), isHidden: \(hoverView.isHidden)")
     }
     
     private func createActionButton(title: String, systemImage: String, color: NSColor) -> NSButton {
@@ -241,7 +227,6 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
             userInfo: nil
         )
         view.addTrackingArea(trackingArea!)
-        NSLog("🎭 Tracking area added successfully")
     }
     
     func updateTrackingAreas() {
@@ -250,11 +235,9 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
             view.removeTrackingArea(trackingArea)
         }
         setupTrackingArea()
-        NSLog("🎭 Tracking areas updated")
     }
     
     override func mouseEntered(with event: NSEvent) {
-        NSLog("🎭 MOUSE ENTERED - Starting hover animation")
         isHovered = true
         
         // Smooth hover animation with spring physics
@@ -277,12 +260,10 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
             containerView.layer?.shadowOpacity = 0.6
             
         }) {
-            NSLog("🎭 Hover animation completed - hoverView.alphaValue: \(self.hoverView.alphaValue)")
         }
     }
     
     override func mouseExited(with event: NSEvent) {
-        NSLog("🎭 MOUSE EXITED - Starting exit animation")
         isHovered = false
         
         // Smooth hover exit animation
@@ -305,7 +286,6 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
             containerView.layer?.shadowOpacity = 0.4
             
         }) {
-            NSLog("🎭 Exit animation completed - hoverView.alphaValue: \(self.hoverView.alphaValue)")
         }
     }
     
@@ -335,15 +315,9 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
         // hoverView.isHidden = true
     }
     
-    func configureForEmptyState(mode: DownloadsViewMode) {
-        switch mode {
-        case .recent:
-            fileNameLabel.stringValue = "No recent downloads"
-            ageLabel.stringValue = "Files from the last 5 minutes will appear here"
-        case .all:
-            fileNameLabel.stringValue = "No downloads found"
-            ageLabel.stringValue = "Downloaded files will appear here"
-        }
+    func configureForEmptyState() {
+        fileNameLabel.stringValue = "No downloads found"
+        ageLabel.stringValue = "Downloaded files will appear here"
         
         // Set empty state icon
         thumbnailImageView.image = NSImage(systemSymbolName: "tray", accessibilityDescription: "Empty")
@@ -478,8 +452,49 @@ class FileCollectionViewItem: NSCollectionViewItem, NSDraggingSource {
     @objc private func moveAction() {
         guard let file = currentFile else { return }
         
-        // Start the inline drag session using direct reference
-        downloadsViewController?.startDragSession(for: file)
+        // Show standard file picker for destination selection
+        let openPanel = NSOpenPanel()
+        openPanel.canChooseFiles = false
+        openPanel.canChooseDirectories = true
+        openPanel.allowsMultipleSelection = false
+        openPanel.message = "Choose destination folder for \"\(file.name)\""
+        openPanel.prompt = "Move File"
+        
+        openPanel.begin { [weak self] result in
+            if result == .OK, let destinationURL = openPanel.url {
+                DispatchQueue.main.async {
+                    self?.moveFileToDestination(file, destinationURL: destinationURL)
+                }
+            }
+        }
+    }
+    
+    private func moveFileToDestination(_ file: DownloadFile, destinationURL: URL) {
+        let success = DownloadsFileManager.shared.moveFile(file, to: destinationURL)
+        if success {
+            NSLog("✅ File successfully moved to \(destinationURL.path)")
+            
+            // Add to recent places
+            var recentPlaces = UserDefaults.standard.stringArray(forKey: "DonLoadRecentPlaces") ?? []
+            recentPlaces.removeAll { $0 == destinationURL.absoluteString }
+            recentPlaces.insert(destinationURL.absoluteString, at: 0)
+            if recentPlaces.count > 10 {
+                recentPlaces = Array(recentPlaces.prefix(10))
+            }
+            UserDefaults.standard.set(recentPlaces, forKey: "DonLoadRecentPlaces")
+        } else {
+            NSLog("❌ Failed to move file to \(destinationURL.path)")
+            
+            // Show error alert
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = "Unable to Move File"
+                alert.informativeText = "The file could not be moved to the selected destination."
+                alert.addButton(withTitle: "OK")
+                alert.alertStyle = .critical
+                alert.runModal()
+            }
+        }
     }
 }
 

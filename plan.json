@@ -1,0 +1,155 @@
+{
+  "project": "DonLoad - Downloads Clipboard Manager",
+  "description": "A macOS app that keeps Downloads tidy with auto-delete and provides a status-bar clipboard interface",
+  "phases": [
+    {
+      "id": "phase1",
+      "name": "Core App Foundation",
+      "description": "Set up basic app structure, status bar item, and basic popover",
+      "tasks": [
+        "Set up basic macOS app structure with status bar integration",
+        "Create NSStatusItem with icon and menu",
+        "Implement basic NSPopover anchored to status bar", 
+        "Add basic menu items (Open Popup, Settings, Quit)",
+        "Set up app permissions for Downloads folder access"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "phase2", 
+      "name": "File Monitoring System",
+      "description": "Implement FSEvents monitoring of Downloads folder and file metadata tracking",
+      "tasks": [
+        "Implement FSEvents monitoring for ~/Downloads folder",
+        "Create file metadata tracking system (path, size, UTI, source, timestamps)",
+        "Filter out temporary files (.download, .crdownload)",
+        "Build data model for tracking file states and history",
+        "Implement 5-minute recent window detection"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "phase3",
+      "name": "Collection View UI", 
+      "description": "Build horizontal NSCollectionView with file cells (thumbnail, name, age)",
+      "tasks": [
+        "Build horizontal NSCollectionView for file display",
+        "Create custom file cells with thumbnail (48-64px), filename, and age",
+        "Implement middle-truncated filename display",
+        "Add hover states and action bars",
+        "Support for selection states (normal, selected, hovered, moved, deleted)",
+        "Implement Recent (5 min) vs All (30) view modes"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "phase4",
+      "name": "Basic File Actions",
+      "description": "Implement delete, reveal in Finder, and basic file operations", 
+      "tasks": [
+        "Implement file deletion (move to Trash via FileManager.trashItem)",
+        "Add Reveal in Finder functionality",
+        "Create context menus with standard actions",
+        "Implement Quick Look integration using QLThumbnailGenerator",
+        "Add undo/redo system with action logging",
+        "File exclusion system (exclude from auto-delete)"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "phase5",
+      "name": "Drag & Drop System",
+      "description": "Implement drag operations with secondary popup for folder destinations",
+      "tasks": [
+        "Implement NSDraggingItem support for file URLs", 
+        "Create secondary popup strip with recent/pinned folders",
+        "Add folder management (recent folders from app usage, user-pinned folders)",
+        "Implement drop-on-chip move operations",
+        "Add drag cancellation (drag back to main strip)",
+        "Support multi-file drag operations"
+      ],
+      "status": "completed"
+    },
+    {
+      "id": "phase6", 
+      "name": "Auto-Delete Feature",
+      "description": "Implement retention policy based on last opened date (3/7/15 days)",
+      "tasks": [
+        "Implement retention policy based on kMDItemLastUsedDate",
+        "Support 3/7/15 day configuration options",
+        "Create background cleanup process", 
+        "Add optional per-file confirmation",
+        "Implement restore from Trash with original path memory",
+        "Smart scheduling to avoid disrupting user workflow"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "phase7",
+      "name": "ZIP/DMG Handling", 
+      "description": "Add ZIP uncompression and DMG installation detection",
+      "tasks": [
+        "ZIP uncompression using Archive framework or ditto",
+        "Auto-show extracted items in UI after uncompression",
+        "Optional ZIP removal after successful extraction",
+        "DMG installation detection via /Volumes monitoring and NSWorkspace notifications",
+        "Smart prompting for DMG cleanup after installation"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "phase8",
+      "name": "Settings & Hotkeys",
+      "description": "Implement preferences window and global hotkey support",
+      "tasks": [
+        "Create preferences window for all configurable options",
+        "Implement global hotkey system (using MASShortcut or Event Tap)",
+        "Hotkey configuration UI with conflict detection", 
+        "Settings for retention days, auto-popup behavior, confirmations",
+        "Pinned folders management interface"
+      ],
+      "status": "pending"
+    },
+    {
+      "id": "phase9",
+      "name": "Polish & Testing",
+      "description": "Performance optimization, edge case handling, and user testing",
+      "tasks": [
+        "Performance optimization (< 150ms popover open time)",
+        "Asynchronous thumbnail loading",
+        "Edge case handling and error recovery", 
+        "Accessibility support",
+        "User testing and feedback incorporation",
+        "Final UI polish and animations"
+      ],
+      "status": "pending"
+    }
+  ],
+  "technical_stack": {
+    "platform": "macOS",
+    "language": "Swift", 
+    "frameworks": [
+      "AppKit",
+      "Foundation", 
+      "QuickLook",
+      "UniformTypeIdentifiers",
+      "Security"
+    ],
+    "key_apis": [
+      "NSStatusItem",
+      "NSPopover", 
+      "NSCollectionView",
+      "FSEvents",
+      "FileManager",
+      "NSFileCoordinator",
+      "QLThumbnailGenerator"
+    ]
+  },
+  "design_principles": [
+    "Keep it Simple and Stupid (KISS)",
+    "Use standard macOS frameworks",
+    "Privacy-focused (local-only)",
+    "Performance-oriented (< 150ms response)",
+    "Consistent with macOS design patterns"
+  ]
+}

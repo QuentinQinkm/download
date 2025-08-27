@@ -105,117 +105,47 @@ class DownloadFile: ObservableObject, Identifiable, Hashable {
             ])
             
             self.size = Int64(resourceValues.fileSize ?? 0)
-            
             if let contentType = resourceValues.contentType {
                 self.uti = UTType(contentType.identifier)
             }
             
-            // Log all available dates for debugging
-            NSLog("🔍 File '\(self.name)' - Available dates:")
-            if let creationDate = resourceValues.creationDate {
-                NSLog("  📅 Creation Date: \(creationDate)")
-            }
-            if let modificationDate = resourceValues.contentModificationDate {
-                NSLog("  📅 Modification Date: \(modificationDate)")
-            }
-            if let accessDate = resourceValues.contentAccessDate {
-                NSLog("  📅 Access Date: \(accessDate)")
-            }
+            // Use creation date first, then modification date as fallback
+            self.addedAt = resourceValues.creationDate 
+                        ?? resourceValues.contentModificationDate 
+                        ?? Date()
             
-            // Determine the best date to represent when the file was downloaded
-            // Priority: creation date > modification date > access date
-            var selectedDate: Date?
-            var dateSource = "none"
-            
-            if let creationDate = resourceValues.creationDate {
-                // Creation date is the most reliable for when a file was downloaded
-                selectedDate = creationDate
-                dateSource = "creationDate"
-                NSLog("✅ Using creation date: \(creationDate)")
-            } else if let modificationDate = resourceValues.contentModificationDate {
-                // Modification date can indicate when the file was last changed
-                selectedDate = modificationDate
-                dateSource = "contentModificationDate"
-                NSLog("✅ Using modification date: \(modificationDate)")
-            } else if let accessDate = resourceValues.contentAccessDate {
-                // Access date is least reliable as it changes when files are accessed
-                selectedDate = accessDate
-                dateSource = "contentAccessDate"
-                NSLog("⚠️ Using access date (least reliable): \(accessDate)")
-            }
-            
-            if let selectedDate = selectedDate {
-                self.addedAt = selectedDate
-                NSLog("📅 File '\(self.name)' - Final date set to: \(selectedDate) (source: \(dateSource))")
-            } else {
-                // If no date found, use current time as fallback
-                self.addedAt = Date()
-                NSLog("❌ No date found, using current time: \(self.addedAt)")
-            }
-            
-            // Use access date as lastOpenedAt if available
             self.lastOpenedAt = resourceValues.contentAccessDate
             
-            // Load extended metadata
+            // Try to get more accurate date from Spotlight
             loadExtendedMetadata()
             
         } catch {
             print("Error loading metadata for \(url.path): \(error)")
-            // Fallback to current time if metadata loading fails
             self.addedAt = Date()
         }
     }
     
     private func loadExtendedMetadata() {
-        guard let mdItem = MDItemCreate(kCFAllocatorDefault, url.path as CFString) else { 
-            NSLog("❌ Failed to create MDItem for '\(self.name)'")
-            return 
-        }
+        guard let mdItem = MDItemCreate(kCFAllocatorDefault, url.path as CFString) else { return }
         
-        NSLog("🔍 Loading extended metadata for '\(self.name)'")
+        // Try to get more accurate dates from Spotlight
+        let dateAdded = MDItemCopyAttribute(mdItem, kMDItemDateAdded) as? Date
+        let contentCreationDate = MDItemCopyAttribute(mdItem, kMDItemContentCreationDate) as? Date
         
-        var earliestDate = self.addedAt
-        var dateSource = "initial"
-        
-        // Get date added (kMDItemDateAdded) - most reliable for when file was added to location
-        if let dateAdded = MDItemCopyAttribute(mdItem, kMDItemDateAdded) as? Date {
-            NSLog("📅 Spotlight Date Added: \(dateAdded)")
-            if dateAdded < earliestDate {
-                earliestDate = dateAdded
-                dateSource = "Spotlight Date Added"
-                NSLog("✅ Found earlier date: \(dateAdded) (was: \(self.addedAt))")
-            }
-        }
-        
-        // Get last used date (kMDItemLastUsedDate)
-        if let lastUsedDate = MDItemCopyAttribute(mdItem, kMDItemLastUsedDate) as? Date {
-            NSLog("📅 Spotlight Last Used: \(lastUsedDate)")
-            self.lastOpenedAt = lastUsedDate
-        }
-        
-        // Get source URLs (kMDItemWhereFroms)
-        if let whereFroms = MDItemCopyAttribute(mdItem, kMDItemWhereFroms) as? [String] {
-            NSLog("📥 Source URLs: \(whereFroms)")
-            self.sourceURLs = whereFroms
-        }
-        
-        // Get content creation date (kMDItemContentCreationDate)
-        if let contentCreationDate = MDItemCopyAttribute(mdItem, kMDItemContentCreationDate) as? Date {
-            NSLog("📅 Spotlight Content Creation: \(contentCreationDate)")
-            if contentCreationDate < earliestDate {
-                earliestDate = contentCreationDate
-                dateSource = "Spotlight Content Creation"
-                NSLog("✅ Found earlier date: \(contentCreationDate) (was: \(earliestDate))")
-            }
-        }
-        
-        // Update addedAt with the earliest date found
-        if earliestDate != self.addedAt {
-            NSLog("🔄 Updating addedAt from \(self.addedAt) to \(earliestDate) (source: \(dateSource))")
+        // Use the earliest available date
+        let candidates = [dateAdded, contentCreationDate, self.addedAt].compactMap { $0 }
+        if let earliestDate = candidates.min() {
             self.addedAt = earliestDate
         }
         
-        NSLog("📅 Final addedAt for '\(self.name)': \(self.addedAt)")
+        // Get additional metadata
+        if let lastUsedDate = MDItemCopyAttribute(mdItem, kMDItemLastUsedDate) as? Date {
+            self.lastOpenedAt = lastUsedDate
+        }
+        
+        if let whereFroms = MDItemCopyAttribute(mdItem, kMDItemWhereFroms) as? [String] {
+            self.sourceURLs = whereFroms
+        }
     }
     
     // MARK: - Hashable & Equatable
