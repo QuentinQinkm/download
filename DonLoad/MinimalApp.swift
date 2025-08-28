@@ -268,8 +268,6 @@ struct ContentView: View {
             
             GeometryReader { sectionProxy in
                 ZStack {
-                    VisualEffectBackground()
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
                     VStack(spacing: 0) {
                         Button(action: togglePanel) {
                             HStack {
@@ -298,6 +296,8 @@ struct ContentView: View {
                         }
                     }
                 }
+                .background(VisualEffectBackground())
+                .clipShape(RoundedRectangle(cornerRadius: 16))
                 .frame(minHeight: collapsedSuggestRowHeight, maxHeight: showPanel ? expandedSuggestRowHeight : collapsedSuggestRowHeight)
                 .animation(.easeInOut(duration: 0.27), value: showPanel)
                 .onAppear {
@@ -626,4 +626,3 @@ extension View {
         }
     }
 }
-
