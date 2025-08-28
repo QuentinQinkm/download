@@ -8,6 +8,10 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
+// MARK: - Constants
+
+private let folderItemWidth: CGFloat = 150
+
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
@@ -81,9 +85,9 @@ struct ContentView: View {
     
     private func updatePanelOnDragOrHover(isDraggingFile: Bool) {
         if isDraggingFile {
-            if !showPanel { showPanel = true }
+            if !showPanel { togglePanel() }
         } else {
-            if showPanel { showPanel = false }
+            if showPanel { togglePanel() }
         }
     }
 
@@ -116,7 +120,6 @@ struct ContentView: View {
                             Image(systemName: "chevron.down")
                                 .foregroundColor(.accentColor)
                                 .rotationEffect(.degrees(showPanel ? 180 : 0))
-                                .animation(.easeInOut(duration: 0.2), value: showPanel)
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 16)
@@ -128,13 +131,11 @@ struct ContentView: View {
                         foldersRow
                             .padding(.horizontal, 20)
                             .padding(.top, 10)
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
                 .background(VisualEffectBackground())
                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                .frame(minHeight: collapsedSuggestRowHeight, maxHeight: showPanel ? expandedSuggestRowHeight : collapsedSuggestRowHeight)
-                .animation(.easeInOut(duration: 0.27), value: showPanel)
+                .frame(minHeight: collapsedSuggestRowHeight, maxHeight: showPanel ? expandedSuggestRowHeight : collapsedSuggestRowHeight, alignment: .top)
             }
             .zIndex(1)
         }
@@ -146,7 +147,7 @@ struct ContentView: View {
     }
     
     private func togglePanel() {
-        withAnimation(.easeInOut(duration: 0.27)) {
+        withAnimation(.easeInOut(duration: 0.25)) {
             showPanel.toggle()
         }
     }
@@ -155,22 +156,10 @@ struct ContentView: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .center, spacing: 12) {
                 ForEach(manager.files, id: \.self) { file in
-                    VStack(spacing: 4) {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: file.path))
-                            .resizable()
-                            .frame(width: 48, height: 48)
-                        
-                        Text(file.lastPathComponent)
-                            .font(.caption)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: 80)
+                    AppKitFileItemView(file: file) {
+                        updatePanelOnDragOrHover(isDraggingFile: true)
                     }
                     .frame(width: 80, height: 80)
-                    .onDrag {
-                        updatePanelOnDragOrHover(isDraggingFile: true)
-                        return NSItemProvider(object: file as NSURL)
-                    }
                 }
                 
                 if manager.files.isEmpty {
@@ -185,46 +174,336 @@ struct ContentView: View {
     }
     
     private var foldersRow: some View {
-        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
-            ForEach(folderManager.folders, id: \.url) { folder in
-                FolderItemView(folder: folder)
+        GeometryReader { geometry in
+            let itemWidth: CGFloat = folderItemWidth
+            let spacing: CGFloat = 12
+            let availableWidth = geometry.size.width - 40 // Account for horizontal padding
+            let itemsPerRow = max(1, Int(availableWidth / (itemWidth + spacing)))
+            
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(itemWidth), spacing: spacing), count: itemsPerRow), spacing: spacing) {
+                ForEach(folderManager.folders, id: \.url) { folder in
+                    FolderItemView(folder: folder)
+                }
             }
         }
     }
 }
 
+// MARK: - AppKit File Item View with Proper Drag Support
+
+struct AppKitFileItemView: NSViewRepresentable {
+    let file: URL
+    let onDragStart: () -> Void
+    
+    func makeNSView(context: Context) -> FileItemNSView {
+        let view = FileItemNSView(file: file, onDragStart: onDragStart)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        view.heightAnchor.constraint(equalToConstant: 80).isActive = true
+        return view
+    }
+    
+    func updateNSView(_ nsView: FileItemNSView, context: Context) {
+        nsView.file = file
+    }
+}
+
+class FileItemNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelegate {
+    var file: URL
+    private let onDragStart: () -> Void
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet {
+            needsDisplay = true
+        }
+    }
+    
+    init(file: URL, onDragStart: @escaping () -> Void) {
+        self.file = file
+        self.onDragStart = onDragStart
+        super.init(frame: NSRect(x: 0, y: 0, width: 80, height: 80))
+        
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = true
+        setupTrackingArea()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea {
+            removeTrackingArea(ta)
+        }
+        setupTrackingArea()
+    }
+    
+    private func setupTrackingArea() {
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect]
+        let ta = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(ta)
+        trackingArea = ta
+    }
+    
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+    
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+    
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        
+        // Background
+        if isHovered {
+            NSColor.gray.withAlphaComponent(0.2).setFill()
+            let path = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
+            path.fill()
+        }
+        
+        // File icon
+        let icon = NSWorkspace.shared.icon(forFile: file.path)
+        icon.size = NSSize(width: 48, height: 48)
+        let iconRect = NSRect(
+            x: (bounds.width - 48) / 2,
+            y: bounds.height - 48 - 8,
+            width: 48,
+            height: 48
+        )
+        icon.draw(in: iconRect)
+        
+        // File name
+        let filename = file.lastPathComponent
+        let font = NSFont.systemFont(ofSize: 11)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = .center
+        paragraphStyle.lineBreakMode = .byTruncatingMiddle
+        
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraphStyle
+        ]
+        
+        let textRect = NSRect(x: 4, y: 4, width: bounds.width - 8, height: 20)
+        filename.draw(in: textRect, withAttributes: attributes)
+    }
+    
+    override func mouseDragged(with event: NSEvent) {
+        onDragStart()
+        
+        // Create file promise provider for proper move operation
+        let filePromiseProvider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: self)
+        filePromiseProvider.userInfo = file
+        
+        let draggingItem = NSDraggingItem(pasteboardWriter: filePromiseProvider)
+        let icon = NSWorkspace.shared.icon(forFile: file.path)
+        draggingItem.setDraggingFrame(bounds, contents: icon)
+        
+        beginDraggingSession(with: [draggingItem], event: event, source: self)
+    }
+    
+    // MARK: - NSDraggingSource
+    
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        return .move // Force move operation
+    }
+    
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        if operation == .move {
+            // File was moved successfully, remove from Downloads
+            do {
+                try FileManager.default.removeItem(at: file)
+                DispatchQueue.main.async {
+                    DownloadFileManager.shared.scan()
+                }
+            } catch {
+                print("❌ Failed to remove original file: \(error)")
+            }
+        }
+    }
+    
+    // MARK: - NSFilePromiseProviderDelegate
+    
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        return file.lastPathComponent
+    }
+    
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL, completionHandler: @escaping (Error?) -> Void) {
+        do {
+            // Copy the file to the promised location
+            try FileManager.default.copyItem(at: file, to: url)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+    }
+    
+    func operationQueue(for filePromiseProvider: NSFilePromiseProvider) -> OperationQueue {
+        return OperationQueue.main
+    }
+}
 
 // MARK: - Folder Item View
 
 struct FolderItemView: View {
     let folder: FolderItem
     @State private var hovered = false
+    @State private var dropHovered = false
     
     var body: some View {
-        HStack(spacing: 8) {
-            Image(nsImage: folder.icon)
-                .resizable()
-                .frame(width: 20, height: 20)
-            
-            Text(folder.name)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            
-            Spacer()
+        AppKitFolderDropView(folder: folder, isDropHovered: $dropHovered)
+            .onHover { hovered = $0 }
+    }
+}
+
+struct AppKitFolderDropView: NSViewRepresentable {
+    let folder: FolderItem
+    @Binding var isDropHovered: Bool
+    
+    func makeNSView(context: Context) -> FolderDropNSView {
+        let view = FolderDropNSView(folder: folder)
+        view.onDropHoverChanged = { hovering in
+            DispatchQueue.main.async {
+                self.isDropHovered = hovering
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
-        .frame(width: 150, height: 40)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(hovered ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.primary.opacity(0.1), lineWidth: 1)
-                )
-        )
-        .onHover { hovered = $0 }
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: folderItemWidth).isActive = true
+        view.heightAnchor.constraint(equalToConstant: 50).isActive = true
+        return view
+    }
+    
+    func updateNSView(_ nsView: FolderDropNSView, context: Context) {
+        nsView.folder = folder
+    }
+}
+
+class FolderDropNSView: NSView {
+    var folder: FolderItem
+    var onDropHoverChanged: ((Bool) -> Void)?
+    private var isHovered = false {
+        didSet {
+            needsDisplay = true
+        }
+    }
+    private var trackingArea: NSTrackingArea?
+    
+    init(folder: FolderItem) {
+        self.folder = folder
+        super.init(frame: NSRect(x: 0, y: 0, width: Int(folderItemWidth), height: 50))
+        
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = true
+        
+        registerForDraggedTypes([NSPasteboard.PasteboardType.fileURL])
+        setupTrackingArea()
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let ta = trackingArea {
+            removeTrackingArea(ta)
+        }
+        setupTrackingArea()
+    }
+    
+    private func setupTrackingArea() {
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect]
+        let ta = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(ta)
+        trackingArea = ta
+    }
+    
+    override func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+    
+    override func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+    
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        
+        // Background
+        let bgColor = isHovered ? NSColor.controlAccentColor.withAlphaComponent(0.2) : NSColor.controlBackgroundColor.withAlphaComponent(0.05)
+        bgColor.setFill()
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8)
+        path.fill()
+        
+        // Border
+        NSColor.separatorColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        
+        // Folder icon
+        let icon = folder.icon
+        icon.size = NSSize(width: 20, height: 20)
+        let iconRect = NSRect(x: 8, y: (bounds.height - 20) / 2, width: 20, height: 20)
+        icon.draw(in: iconRect)
+        
+        // Folder name
+        let font = NSFont.systemFont(ofSize: 12)
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.labelColor
+        ]
+        
+        let textRect = NSRect(x: 36, y: (bounds.height - 16) / 2, width: bounds.width - 44, height: 16)
+        folder.name.draw(in: textRect, withAttributes: attributes)
+    }
+    
+    // MARK: - NSDraggingDestination
+    
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onDropHoverChanged?(true)
+        return .move
+    }
+    
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        onDropHoverChanged?(false)
+    }
+    
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        return true
+    }
+    
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pasteboard = sender.draggingPasteboard.propertyList(forType: .fileURL) as? String,
+              let sourceURL = URL(string: pasteboard) else {
+            print("❌ Failed to get file URL from drag operation")
+            return false
+        }
+        
+        print("🎯 AppKit drop received: \(sourceURL.path)")
+        
+        let destFile = folder.url.appendingPathComponent(sourceURL.lastPathComponent)
+        do {
+            try FileManager.default.moveItem(at: sourceURL, to: destFile)
+            print("✅ File moved successfully via AppKit")
+            DispatchQueue.main.async {
+                DownloadFileManager.shared.scan()
+            }
+        } catch {
+            print("❌ Failed to move file via AppKit: \(error)")
+        }
+        
+        return true
+    }
+    
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        onDropHoverChanged?(false)
     }
 }
 
