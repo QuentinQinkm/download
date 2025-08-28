@@ -255,17 +255,15 @@ struct ContentView: View {
     
     var body: some View {
         VStack(spacing: 12) {
-            ZStack {
-                VisualEffectBackground()
-                    .padding(.vertical, 4)
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                filesRow
-                    .frame(maxWidth: .infinity)
-                    // Center the HStack when only one file exists
-                    .if(manager.files.count == 1) { view in
-                        view.frame(maxWidth: .infinity, alignment: .center)
-                    }
-            }
+            filesRow
+                .frame(maxWidth: .infinity)
+                // Center the HStack when only one file exists
+                .if(manager.files.count == 1) { view in
+                    view.frame(maxWidth: .infinity, alignment: .center)
+                }
+                .padding(.vertical, 8)
+                .background(VisualEffectBackground())
+                .clipShape(RoundedRectangle(cornerRadius: 16))
             .zIndex(0)
             
             GeometryReader { sectionProxy in
@@ -434,18 +432,25 @@ struct FileView: View {
         .padding(4)
         .onHover { hovered = $0 }
         .onDrag {
-            // Start dragging
             isDragging = true
             localIsDragging = true
             
-            // Removed auto-collapse timeout logic; no delayed reset here
+            // Reset dragging state after a delay to handle drag completion
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                isDragging = false
+                localIsDragging = false
+            }
             
             return NSItemProvider(object: file as NSURL)
         }
-        .onDrop(of: [.fileURL], isTargeted: nil) { _ in
-            // Do nothing here to avoid conflicts with FolderItemView
-            false
-        }
+        .simultaneousGesture(
+            DragGesture()
+                .onEnded { _ in
+                    // Reset dragging state when drag gesture ends
+                    isDragging = false
+                    localIsDragging = false
+                }
+        )
     }
     
     private func deleteFile() {
