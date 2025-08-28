@@ -19,10 +19,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.button?.target = self
         
         if let screen = NSScreen.main {
-            let width = screen.frame.width * 0.5
-            let height: CGFloat = 120
-            let x = screen.frame.width * 0.25
-            let y = screen.frame.maxY - height - 50
+            let visible = screen.visibleFrame
+            let width = visible.width * 0.5
+            let height: CGFloat = 340 // match your SwiftUI ContentView frame!
+            let x = visible.origin.x + (visible.width - width) / 2
+            let verticalInset: CGFloat = 48
+            let y = visible.origin.y + visible.height - height - verticalInset
             
             window = NSWindow(
                 contentRect: NSRect(x: x, y: y, width: width, height: height),
@@ -31,7 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 defer: false
             )
             
-            let contentView = ContentView(windowController: WindowController(window: window!))
+            let contentView = ContentView()
             window?.contentViewController = NSHostingController(rootView: contentView)
             window?.backgroundColor = NSColor.clear
             window?.isOpaque = false
@@ -46,7 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if window.isVisible {
             window.orderOut(nil)
         } else {
-            window.makeKeyAndOrderFront(nil)
+            window.orderFront(nil)
         }
     }
 }
@@ -62,49 +64,168 @@ struct MinimalDonLoadApp {
     }
 }
 
-// MARK: - Window Controller for animations
+// MARK: - Window Controller
 
 class WindowController: ObservableObject {
     let window: NSWindow
     @Published var isExpanded = false
+    @Published var isAnimating = false
     
     init(window: NSWindow) {
         self.window = window
     }
     
-    func expand(to height: CGFloat) {
+    func expand() {
+        guard !isAnimating else { return }
+        isAnimating = true
         let currentFrame = window.frame
+        let targetHeight: CGFloat = 240
+        let heightDelta = targetHeight - currentFrame.height
         let newFrame = NSRect(
             x: currentFrame.origin.x,
-            y: currentFrame.maxY - height,
+            y: currentFrame.origin.y - heightDelta,
             width: currentFrame.width,
-            height: height
+            height: targetHeight
         )
-        
-        NSAnimationContext.runAnimationGroup { context in
+        print("🔧 Expanding: Top stays at \(currentFrame.origin.y + currentFrame.height), height goes to \(targetHeight)")
+        NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             window.animator().setFrame(newFrame, display: true)
-        }
-        isExpanded = true
+        }, completionHandler: {
+            DispatchQueue.main.async {
+                self.isExpanded = true
+                self.isAnimating = false
+            }
+        })
     }
     
     func collapse() {
-        let currentFrame = window.frame
-        let newFrame = NSRect(
-            x: currentFrame.origin.x,
-            y: currentFrame.maxY - 120,
-            width: currentFrame.width,
-            height: 120
-        )
-        
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.3
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(newFrame, display: true)
-        }
+        guard !isAnimating else { return }
         isExpanded = false
+        isAnimating = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            let currentFrame = self.window.frame
+            let targetHeight: CGFloat = 120
+            let heightDelta = currentFrame.height - targetHeight
+            let newFrame = NSRect(
+                x: currentFrame.origin.x,
+                y: currentFrame.origin.y + heightDelta,
+                width: currentFrame.width,
+                height: targetHeight
+            )
+            print("🔧 Collapsing: Top stays at \(currentFrame.origin.y + currentFrame.height), height goes to \(targetHeight)")
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                self.window.animator().setFrame(newFrame, display: true)
+            }, completionHandler: {
+                DispatchQueue.main.async {
+                    self.isAnimating = false
+                }
+            })
+        }
     }
+}
+
+// MARK: - Folders Panel Controller
+
+class FoldersPanelController {
+    private var panel: NSPanel?
+    private var hostingController: NSHostingController<AnyView>?
+    private weak var parentWindow: NSWindow?
+    
+    init(parentWindow: NSWindow?) {
+        self.parentWindow = parentWindow
+    }
+    
+    func showPanel(relativeTo rect: NSRect, in view: NSView, withContent content: AnyView) {
+        if panel == nil {
+            let style: NSWindow.StyleMask = [.borderless]
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 500, height: 140),
+                                styleMask: style,
+                                backing: .buffered,
+                                defer: false)
+            panel.isFloatingPanel = true
+            panel.level = .popUpMenu
+            panel.hasShadow = true
+            panel.backgroundColor = .clear
+            panel.isOpaque = false
+            panel.hasShadow = true
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            
+            hostingController = NSHostingController(rootView: content)
+            hostingController?.view.frame = panel.contentView!.bounds
+            hostingController?.view.autoresizingMask = [.width, .height]
+            hostingController?.view.wantsLayer = true
+            hostingController?.view.layer?.cornerRadius = 12
+            hostingController?.view.layer?.masksToBounds = true
+            
+            panel.contentView?.addSubview(hostingController!.view)
+            self.panel = panel
+        } else {
+            hostingController?.rootView = content
+        }
+        
+        guard let panel = panel else { return }
+        
+        // Position the panel directly below the given rect in the given view's coordinate
+        let screenRect = view.convert(rect, to: nil)
+        let windowRect = view.window?.convertToScreen(screenRect) ?? screenRect
+        
+        let panelOriginX = windowRect.origin.x + (windowRect.width - panel.frame.width) / 2
+        let panelOriginY = windowRect.origin.y - panel.frame.height
+        
+        let targetFrame = NSRect(x: panelOriginX, y: panelOriginY, width: panel.frame.width, height: panel.frame.height)
+        
+        if panel.isVisible {
+            // Animate moving to new position if needed
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().setFrame(targetFrame, display: true)
+            })
+        } else {
+            panel.setFrame(targetFrame, display: false)
+            parentWindow?.addChildWindow(panel, ordered: .above)
+            panel.alphaValue = 0
+            panel.makeKeyAndOrderFront(nil)
+            
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.25
+                panel.animator().alphaValue = 1
+            })
+        }
+    }
+    
+    func hidePanel() {
+        guard let panel = panel else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.orderOut(nil)
+            self.parentWindow?.removeChildWindow(panel)
+        })
+    }
+}
+
+// MARK: - AnchorView for NSViewRepresentable
+
+struct AnchorView: NSViewRepresentable {
+    @Binding var nsView: NSView?
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            self.nsView = view
+        }
+        return view
+    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 // MARK: - Main Content View
@@ -112,55 +233,113 @@ class WindowController: ObservableObject {
 struct ContentView: View {
     @StateObject private var manager = DownloadFileManager.shared
     @StateObject private var folderManager = FolderManager.shared
-    @ObservedObject var windowController: WindowController
-    @State private var isDragging = false
+    @State private var showPanel = false
+    @State private var isDraggingFile = false
+    @State private var isHoveringFolder = false
     
+    private let collapsedSuggestRowHeight: CGFloat = 56
+    private let expandedSuggestRowHeight: CGFloat = 192
+    
+    // Expand/collapse 2nd row automatically on drag or hover
+    private func updatePanelOnDragOrHover() {
+        if isDraggingFile || isHoveringFolder {
+            if !showPanel { showPanel = true }
+        } else {
+            if showPanel { showPanel = false }
+        }
+    }
+
     private var windowWidth: CGFloat {
         (NSScreen.main?.frame.width ?? 800) * 0.5
     }
     
-    private var gridHeight: CGFloat {
-        let itemWidth: CGFloat = 150
-        let itemHeight: CGFloat = 40
-        let spacing: CGFloat = 8
-        let padding: CGFloat = 32
-        
-        let itemsPerRow = max(1, Int((windowWidth - padding) / (itemWidth + spacing)))
-        let rows = max(1, Int(ceil(Double(folderManager.folders.count) / Double(itemsPerRow))))
-        return CGFloat(rows) * itemHeight + CGFloat(rows - 1) * spacing + padding
-    }
-    
     var body: some View {
-        VStack(spacing: 0) {
-            // Files row
-            filesRow
-            
-            // Folders row (appears during drag)
-            if isDragging {
-                foldersRow
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+        VStack(spacing: 12) {
+            ZStack {
+                VisualEffectBackground()
+                    .padding(.vertical, 4)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                filesRow
+                    .frame(maxWidth: .infinity)
+                    // Center the HStack when only one file exists
+                    .if(manager.files.count == 1) { view in
+                        view.frame(maxWidth: .infinity, alignment: .center)
+                    }
             }
+            .zIndex(0)
+            
+            GeometryReader { sectionProxy in
+                ZStack {
+                    VisualEffectBackground()
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                    VStack(spacing: 0) {
+                        Button(action: togglePanel) {
+                            HStack {
+                                Image(systemName: "folder")
+                                    .foregroundColor(.accentColor)
+                                Text("Suggest location")
+                                    .font(.headline)
+                                    .foregroundColor(.accentColor)
+                                Spacer()
+                                Image(systemName: "chevron.down")
+                                    .foregroundColor(.accentColor)
+                                    .rotationEffect(.degrees(showPanel ? 180 : 0))
+                                    .animation(.easeInOut(duration: 0.2), value: showPanel)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 16)
+                            .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.plain)
+
+                        if showPanel {
+                            foldersRow
+                                .padding(.horizontal, 20)
+                                .padding(.top, 10)
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+                    }
+                }
+                .frame(minHeight: collapsedSuggestRowHeight, maxHeight: showPanel ? expandedSuggestRowHeight : collapsedSuggestRowHeight)
+                .animation(.easeInOut(duration: 0.27), value: showPanel)
+                .onAppear {
+                    let g = sectionProxy.frame(in: .global)
+                    let l = sectionProxy.frame(in: .local)
+                    print("[DEBUG] suggestRow global: \(g), local: \(l)")
+                }
+                .onChange(of: sectionProxy.size) { _ in
+                    let g = sectionProxy.frame(in: .global)
+                    let l = sectionProxy.frame(in: .local)
+                    print("[DEBUG] suggestRow (changed) global: \(g), local: \(l)")
+                }
+            }
+            .zIndex(1)
         }
-        .frame(width: windowWidth)
-        .background(VisualEffectBackground().clipShape(RoundedRectangle(cornerRadius: 12)))
-        .onAppear { 
+        .frame(width: windowWidth, height: 340, alignment: .top)
+        // Removed outer background and clipShape as instructed
+        .onAppear {
             manager.scan()
             folderManager.loadFolders()
         }
-        .onChange(of: isDragging) { dragging in
-            if dragging {
-                windowController.expand(to: 120 + gridHeight)
-            } else {
-                windowController.collapse()
-            }
+        .onChange(of: isDraggingFile) { _ in
+            updatePanelOnDragOrHover()
+        }
+        .onChange(of: isHoveringFolder) { _ in
+            updatePanelOnDragOrHover()
+        }
+    }
+    
+    private func togglePanel() {
+        withAnimation(.easeInOut(duration: 0.27)) {
+            showPanel.toggle()
         }
     }
     
     private var filesRow: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 ForEach(manager.files, id: \.self) { file in
-                    FileView(file: file, isDragging: $isDragging)
+                    FileView(file: file, isDragging: Binding(get: { isDraggingFile }, set: { isDraggingFile = $0 }))
                 }
                 
                 if manager.files.isEmpty {
@@ -168,28 +347,31 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                 }
             }
-            .padding()
+            .padding(.vertical, 0)
+            .padding(.horizontal, 8)
+            .frame(minHeight: 120)
+            .frame(maxWidth: .infinity)
         }
         .frame(height: 120)
     }
     
     private var foldersRow: some View {
-        LazyVGrid(columns: gridColumns, spacing: 8) {
-            ForEach(folderManager.folders, id: \.url) { folder in
-                FolderItemView(folder: folder)
+        GeometryReader { geometry in
+            let padding: CGFloat = 0
+            let itemWidth: CGFloat = 150
+            let spacing: CGFloat = 12
+            let availableWidth = geometry.size.width - padding * 2
+            let itemsPerRow = max(1, Int(availableWidth / (itemWidth + spacing)))
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(itemWidth), spacing: spacing), count: itemsPerRow), spacing: spacing) {
+                ForEach(folderManager.folders, id: \.url) { folder in
+                    FolderItemView(folder: folder,
+                                   isDragging: Binding(get: { isDraggingFile }, set: { isDraggingFile = $0 }),
+                                   isHovering: Binding(get: { isHoveringFolder }, set: { isHoveringFolder = $0 }))
+                }
             }
+            .frame(width: geometry.size.width, alignment: .center)
         }
-        .padding()
-        .frame(height: gridHeight)
-    }
-    
-    private var gridColumns: [GridItem] {
-        let itemWidth: CGFloat = 150
-        let spacing: CGFloat = 8
-        let availableWidth = windowWidth - 32 // padding
-        let itemsPerRow = max(1, Int(availableWidth / (itemWidth + spacing)))
-        
-        return Array(repeating: GridItem(.fixed(itemWidth), spacing: spacing), count: itemsPerRow)
+        // Removed frame(height: showPanel ? 160 : 0) and clipped()
     }
 }
 
@@ -199,64 +381,71 @@ struct FileView: View {
     let file: URL
     @Binding var isDragging: Bool
     @State private var hovered = false
-    @State private var dragOffset = CGSize.zero
+    @State private var localIsDragging = false
     
     var body: some View {
-        ZStack {
-            VStack(spacing: 4) {
+        ZStack(alignment: .top) {
+            VStack(alignment: .center, spacing: 4) {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: file.path))
                     .resizable()
-                    .frame(width: hovered ? 64 : 48, height: hovered ? 64 : 48)
-                    .animation(.easeInOut(duration: 0.2), value: hovered)
+                    .scaledToFit()
+                    .frame(width: 48, height: 48)
                 
                 Text(file.lastPathComponent)
                     .font(.caption)
                     .lineLimit(2)
                     .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .multilineTextAlignment(.center)
             }
+            .frame(width: 80, height: 80, alignment: .center)
             
-            if hovered {
-                VStack {
-                    HStack {
-                        Button(action: deleteFile) {
-                            Image(systemName: "trash")
-                                .foregroundColor(.white)
-                                .background(Circle().fill(Color.red).frame(width: 20, height: 20))
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Spacer()
-                        
-                        Button(action: moveFile) {
-                            Image(systemName: "folder")
-                                .foregroundColor(.white)
-                                .background(Circle().fill(Color.blue).frame(width: 20, height: 20))
-                        }
-                        .buttonStyle(.plain)
+            VStack {
+                HStack {
+                    Button(action: deleteFile) {
+                        Image(systemName: "trash")
+                            .foregroundColor(.white)
+                            .background(Circle().fill(Color.red).frame(width: 20, height: 20))
                     }
-                    .padding(.horizontal, 8)
+                    .buttonStyle(.plain)
                     
                     Spacer()
+                    
+                    Button(action: moveFile) {
+                        Image(systemName: "folder")
+                            .foregroundColor(.white)
+                            .background(Circle().fill(Color.blue).frame(width: 20, height: 20))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .frame(width: 80, height: 80)
+                .padding(.horizontal, 8)
+                
+                Spacer()
             }
+            .frame(width: 80, height: 80)
+            .opacity(hovered && !localIsDragging ? 1 : 0)
+            .allowsHitTesting(hovered && !localIsDragging)
         }
         .frame(width: 80, height: 80)
-        .onHover { hovered = $0 }
-        .offset(dragOffset)
-        .gesture(
-            DragGesture()
-                .onChanged { value in
-                    dragOffset = value.translation
-                    if !isDragging && (abs(value.translation.width) > 5 || abs(value.translation.height) > 5) {
-                        isDragging = true
-                    }
-                }
-                .onEnded { _ in
-                    dragOffset = .zero
-                    isDragging = false
-                }
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(hovered ? Color.gray.opacity(0.35) : Color.clear)
         )
+        .padding(4)
+        .onHover { hovered = $0 }
+        .onDrag {
+            // Start dragging
+            isDragging = true
+            localIsDragging = true
+            
+            // Removed auto-collapse timeout logic; no delayed reset here
+            
+            return NSItemProvider(object: file as NSURL)
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil) { _ in
+            // Do nothing here to avoid conflicts with FolderItemView
+            false
+        }
     }
     
     private func deleteFile() {
@@ -282,7 +471,10 @@ struct FileView: View {
 
 struct FolderItemView: View {
     let folder: FolderItem
+    @Binding var isDragging: Bool
+    @Binding var isHovering: Bool
     @State private var hovered = false
+    @State private var localDropHover = false
     
     var body: some View {
         HStack(spacing: 8) {
@@ -302,16 +494,51 @@ struct FolderItemView: View {
         .frame(width: 150, height: 40)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(hovered ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
+                .fill((hovered || localDropHover) ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.primary.opacity(0.1), lineWidth: 1)
                 )
         )
         .onHover { hovered = $0 }
-        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
-            // Handle file drop here
+        .onDrop(of: [.fileURL], isTargeted: $localDropHover) { providers in
+            isHovering = true
+            
+            if let itemProvider = providers.first {
+                itemProvider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { (item, error) in
+                    guard error == nil else { return }
+                    if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        DispatchQueue.main.async {
+                            let destFile = folder.url.appendingPathComponent(url.lastPathComponent)
+                            do {
+                                try Foundation.FileManager.default.moveItem(at: url, to: destFile)
+                                DownloadFileManager.shared.scan()
+                            } catch {
+                                // Handle error if needed
+                            }
+                        }
+                    } else if let url = item as? URL {
+                        DispatchQueue.main.async {
+                            let destFile = folder.url.appendingPathComponent(url.lastPathComponent)
+                            do {
+                                try Foundation.FileManager.default.moveItem(at: url, to: destFile)
+                                DownloadFileManager.shared.scan()
+                            } catch {
+                                // Handle error if needed
+                            }
+                        }
+                    }
+                }
+            }
+            
             return true
+        }
+        .onChange(of: localDropHover) { _ in
+            if !localDropHover {
+                isHovering = false
+            } else {
+                isHovering = true
+            }
         }
     }
 }
@@ -329,13 +556,14 @@ class FolderManager: ObservableObject {
     @Published var folders: [FolderItem] = []
     
     func loadFolders() {
+        let folderContentType = UTType.folder
         folders = [
-            FolderItem(name: "Desktop", url: Foundation.FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(forFileType: "public.folder")),
-            FolderItem(name: "Documents", url: Foundation.FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(forFileType: "public.folder")),
-            FolderItem(name: "Pictures", url: Foundation.FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(forFileType: "public.folder")),
-            FolderItem(name: "Movies", url: Foundation.FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(forFileType: "public.folder")),
-            FolderItem(name: "Music", url: Foundation.FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(forFileType: "public.folder")),
-            FolderItem(name: "Applications", url: URL(fileURLWithPath: "/Applications"), icon: NSWorkspace.shared.icon(forFileType: "public.folder"))
+            FolderItem(name: "Desktop", url: Foundation.FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(for: folderContentType)),
+            FolderItem(name: "Documents", url: Foundation.FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(for: folderContentType)),
+            FolderItem(name: "Pictures", url: Foundation.FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(for: folderContentType)),
+            FolderItem(name: "Movies", url: Foundation.FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(for: folderContentType)),
+            FolderItem(name: "Music", url: Foundation.FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first!, icon: NSWorkspace.shared.icon(for: folderContentType)),
+            FolderItem(name: "Applications", url: URL(fileURLWithPath: "/Applications"), icon: NSWorkspace.shared.icon(for: folderContentType))
         ]
     }
 }
@@ -380,3 +608,17 @@ struct VisualEffectBackground: NSViewRepresentable {
     
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
+
+// MARK: - View Extension for Conditional Modifier
+
+extension View {
+    @ViewBuilder
+    func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
+
