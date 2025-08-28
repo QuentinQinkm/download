@@ -297,11 +297,8 @@ class FileItemNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelegate {
     override func mouseDragged(with event: NSEvent) {
         onDragStart()
         
-        // Create file promise provider for proper move operation
-        let filePromiseProvider = NSFilePromiseProvider(fileType: UTType.data.identifier, delegate: self)
-        filePromiseProvider.userInfo = file
-        
-        let draggingItem = NSDraggingItem(pasteboardWriter: filePromiseProvider)
+        // Use a simple approach that works for both internal and external drops
+        let draggingItem = NSDraggingItem(pasteboardWriter: file as NSURL)
         let icon = NSWorkspace.shared.icon(forFile: file.path)
         draggingItem.setDraggingFrame(bounds, contents: icon)
         
@@ -315,16 +312,9 @@ class FileItemNSView: NSView, NSDraggingSource, NSFilePromiseProviderDelegate {
     }
     
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        if operation == .move {
-            // File was moved successfully, remove from Downloads
-            do {
-                try FileManager.default.removeItem(at: file)
-                DispatchQueue.main.async {
-                    DownloadFileManager.shared.scan()
-                }
-            } catch {
-                print("❌ Failed to remove original file: \(error)")
-            }
+        // Refresh the file list after any drag operation
+        DispatchQueue.main.async {
+            DownloadFileManager.shared.scan()
         }
     }
     
@@ -402,7 +392,7 @@ class FolderDropNSView: NSView {
         layer?.cornerRadius = 8
         layer?.masksToBounds = true
         
-        registerForDraggedTypes([NSPasteboard.PasteboardType.fileURL])
+        registerForDraggedTypes([NSPasteboard.PasteboardType.fileURL, NSPasteboard.PasteboardType.URL])
         setupTrackingArea()
     }
     
@@ -480,26 +470,36 @@ class FolderDropNSView: NSView {
     }
     
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let pasteboard = sender.draggingPasteboard.propertyList(forType: .fileURL) as? String,
-              let sourceURL = URL(string: pasteboard) else {
-            print("❌ Failed to get file URL from drag operation")
-            return false
+        // Try different ways to get the file URL
+        if let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+           let sourceURL = urls.first {
+            return performMove(from: sourceURL)
         }
         
-        print("🎯 AppKit drop received: \(sourceURL.path)")
+        if let urlString = sender.draggingPasteboard.propertyList(forType: .fileURL) as? String,
+           let sourceURL = URL(string: urlString) {
+            return performMove(from: sourceURL)
+        }
         
+        if let urlString = sender.draggingPasteboard.string(forType: .fileURL),
+           let sourceURL = URL(string: urlString) {
+            return performMove(from: sourceURL)
+        }
+        
+        return false
+    }
+    
+    private func performMove(from sourceURL: URL) -> Bool {
         let destFile = folder.url.appendingPathComponent(sourceURL.lastPathComponent)
         do {
             try FileManager.default.moveItem(at: sourceURL, to: destFile)
-            print("✅ File moved successfully via AppKit")
             DispatchQueue.main.async {
                 DownloadFileManager.shared.scan()
             }
+            return true
         } catch {
-            print("❌ Failed to move file via AppKit: \(error)")
+            return false
         }
-        
-        return true
     }
     
     override func concludeDragOperation(_ sender: NSDraggingInfo?) {
